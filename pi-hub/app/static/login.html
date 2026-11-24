@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Click</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main style="display:grid;place-items:center;min-height:100dvh;padding:16px">
+    <form id="login" class="card" style="width:min(360px,100%);text-align:center;padding:28px">
+      <div class="logo big" aria-hidden="true"></div>
+      <h1 style="margin:0 0 6px;font-size:1.5em">Click</h1>
+      <p class="help" style="color:var(--muted);margin:0 0 16px">Enter the password you chose when you installed Click.</p>
+      <input class="input" type="password" id="password" placeholder="Password" autocomplete="current-password" required autofocus>
+      <button class="btn primary wide" style="margin-top:12px" type="submit">Unlock</button>
+      <p id="error" style="color:var(--danger);min-height:1.5em;margin:10px 0 0"></p>
+    </form>
+  </main>
+  <script src="/static/login.js"></script>
+</body>
+</html>

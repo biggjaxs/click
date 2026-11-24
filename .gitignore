@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.db
+*.db-wal
+*.db-shm
+build/
+dist/
+packaging/Click.iconset/
+packaging/Click.icns
+*.dmg

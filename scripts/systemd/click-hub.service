@@ -1,0 +1,31 @@
+# Click Pi Hub - installed by scripts/install-pi.sh (placeholders filled in there)
+[Unit]
+Description=Click Pi Hub (chat app, memory, orchestrator)
+After=network-online.target ollama.service avahi-daemon.service
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=@REPO@/pi-hub
+Environment=CLICK_DATA_DIR=@DATA@
+Environment=CLICK_FALLBACK_MODEL=@MODEL@
+Environment=CLICK_EMBED_MODEL=@EMBED@
+Environment=PYTHONDONTWRITEBYTECODE=1
+# The memory key and login hash are handed to the app privately (only readable by this service).
+LoadCredential=dbkey:@SECRETS@/db.key
+LoadCredential=uihash:@SECRETS@/ui.hash
+ExecStart=@REPO@/pi-hub/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 80 --no-proxy-headers
+# Lets the app use port 80 (so the address is just http://click.local) without running as root.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+Restart=on-failure
+RestartSec=3
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@DATA@
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

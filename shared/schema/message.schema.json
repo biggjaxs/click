@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Click Pi <-> PC message",
+  "type": "object",
+  "required": ["id", "type", "service", "action", "payload", "timestamp"],
+  "properties": {
+    "id": {"type": "string", "description": "UUID. Responses, stream chunks and errors reuse the request's id."},
+    "type": {"enum": ["request", "response", "event", "stream_chunk", "error"]},
+    "service": {"enum": ["inference", "image", "screen", "cursor", "files", "system"]},
+    "action": {"type": "string", "examples": ["chat", "generate", "capture", "move", "click", "read_file", "heartbeat"]},
+    "payload": {"type": "object"},
+    "requires_confirmation": {"type": "boolean", "default": false},
+    "timestamp": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}

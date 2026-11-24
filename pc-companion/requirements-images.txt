@@ -1,0 +1,8 @@
+# Image generation. PyTorch is installed separately by the installer (CUDA build on NVIDIA PCs).
+diffusers>=0.30           # Apache-2.0
+transformers>=4.44        # Apache-2.0 (text encoders + the safety classifier)
+accelerate>=0.33          # Apache-2.0 (memory offloading for smaller GPUs)
+safetensors>=0.4          # Apache-2.0
+huggingface_hub>=0.24     # Apache-2.0
+sentencepiece>=0.2        # Apache-2.0 (FLUX tokenizer)
+protobuf>=4.25            # BSD-3

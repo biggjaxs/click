@@ -1,0 +1,2 @@
+pywinauto>=0.6.8          # BSD-3 (Windows UI Automation)
+rapidocr_onnxruntime>=1.3 # Apache-2.0 (OCR, runs locally; Macs use Apple Vision instead)

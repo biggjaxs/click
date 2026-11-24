@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Click</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/vendor/hljs-light.css" id="hljs-light">
+  <link rel="stylesheet" href="/static/vendor/hljs-dark.css" id="hljs-dark" disabled>
+</head>
+<body>
+<div class="app">
+  <aside id="sidebar" class="sidebar">
+    <div class="brand">
+      <span class="logo" data-logo></span>
+      <span class="brand-name" id="brand-name">Click</span>
+      <button class="icon-btn only-mobile" id="close-sidebar" aria-label="Close menu" data-icon="x"></button>
+    </div>
+    <button class="btn new-chat" id="new-chat"><span data-icon="plus"></span>New chat</button>
+    <div class="search-wrap"><span data-icon="search"></span>
+      <input type="search" id="conv-search" class="input" placeholder="Search" aria-label="Search chats"></div>
+    <label class="switch-row" title="Incognito chats save nothing: no history, no memories.">
+      <input type="checkbox" id="incognito"><span class="switch"></span><span>Incognito</span>
+    </label>
+    <div class="section-label">Recent</div>
+    <nav id="conv-list" class="conv-list" aria-label="Conversations"></nav>
+    <div class="side-nav">
+      <button class="nav-btn" data-panel="gallery"><span data-icon="image"></span>Gallery</button>
+      <button class="nav-btn" data-panel="memory"><span data-icon="memory"></span>Memory</button>
+      <button class="nav-btn" data-panel="permissions"><span data-icon="shield"></span>Permissions</button>
+      <button class="nav-btn" data-panel="activity"><span data-icon="list"></span>Activity</button>
+      <button class="nav-btn" data-panel="settings"><span data-icon="settings"></span>Settings</button>
+      <button class="btn danger wide" id="pause-btn"><span data-icon="pause"></span><span>Pause everything</span></button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn only-mobile" id="open-sidebar" aria-label="Menu" data-icon="menu"></button>
+      <div class="title" id="chat-title">New chat</div>
+      <span class="status-pill hidden" id="pill-watch"><span class="dot rec"></span>Watching</span>
+      <span class="status-pill hidden" id="pill-paused"><span class="dot warn"></span>Paused</span>
+      <span class="status-pill" id="pill-pc"><span class="dot"></span><span>Connecting</span></span>
+      <button class="icon-btn tile-only" id="tile-new" aria-label="New chat" title="New chat" data-icon="plus"></button>
+    </header>
+
+    <section id="messages" class="messages" aria-live="polite">
+      <div class="empty" id="empty-state">
+        <div class="logo big" data-logo></div>
+        <h1>How can I help?</h1>
+        <p>Ask anything. I can see your screen, point things out with my own cursor, make images, read your files and remember what you tell me.</p>
+        <div class="suggestions">
+          <button class="suggestion" data-text="What's on my screen?"><span data-icon="monitor"></span>What's on my screen?</button>
+          <button class="suggestion" data-text="Show me where the Wi-Fi settings are"><span data-icon="pointer"></span>Show me where the Wi-Fi settings are</button>
+          <button class="suggestion" data-text="Draw a sunset over a lake"><span data-icon="image"></span>Draw a sunset over a lake</button>
+          <button class="suggestion" data-text="Remember that I like short answers"><span data-icon="memory"></span>Remember that I like short answers</button>
+        </div>
+      </div>
+    </section>
+
+    <form id="composer" class="composer" autocomplete="off">
+      <div id="attachments" class="attachments"></div>
+      <div class="composer-row">
+        <label class="icon-btn attach" title="Attach files or images"><span data-icon="paperclip"></span>
+          <input type="file" id="file-input" multiple hidden></label>
+        <textarea id="input" rows="1" placeholder="Message Click" aria-label="Message"></textarea>
+        <button type="submit" class="send-btn" id="send-btn" aria-label="Send" data-icon="arrow-up"></button>
+        <button type="button" class="send-btn stop hidden" id="stop-btn" aria-label="Stop" data-icon="stop"></button>
+      </div>
+    </form>
+
+    <footer class="statusbar" id="statusbar">
+      <span id="sb-model">Connecting</span>
+      <span id="sb-memory"></span>
+    </footer>
+  </main>
+</div>
+
+<div id="panel" class="panel hidden" role="dialog" aria-modal="true">
+  <div class="panel-backdrop" data-close></div>
+  <div class="panel-body">
+    <header class="panel-head">
+      <h2 id="panel-title"></h2>
+      <button class="icon-btn" data-close aria-label="Close" data-icon="x"></button>
+    </header>
+    <div id="panel-content" class="panel-content"></div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<script src="/static/vendor/highlight.min.js"></script>
+<script src="/static/icons.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

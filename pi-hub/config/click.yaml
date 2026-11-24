@@ -1,0 +1,20 @@
+# Click Pi Hub settings. Environment variables (CLICK_*) override these.
+# After changing this file restart Click:  sudo systemctl restart click-hub
+
+assistant_name: Click
+# Small backup model on the Pi, used when your computer is off (must fit in the Pi's RAM).
+fallback_model: gemma3:1b
+# Tiny model that turns text into vectors for memory search (runs on the Pi).
+embed_model: all-minilm
+ollama_url: http://127.0.0.1:11434
+
+# How much past chat / memory goes into each prompt (roughly 4 characters per token).
+history_token_budget: 3000
+memory_token_budget: 700
+# Maximum tool steps per answer.
+max_tool_rounds: 6
+# Seconds to wait for answers / images from your computer.
+request_timeout_s: 120
+image_timeout_s: 900
+# Fill this in only if your computer isn't found automatically (e.g. 192.168.1.50).
+manual_pc_host: ""

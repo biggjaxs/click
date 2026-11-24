@@ -1,0 +1,87 @@
+# Builds Click.dmg on a GitHub Mac (Apple Silicon) every time the code changes on main,
+# runs the tests and a start-up self-test of the finished app, then publishes the .dmg as a Release.
+name: Build Click for Mac
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-mac
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install SQLCipher (memory encryption)
+        run: |
+          brew install sqlcipher
+          SQLC="$(brew --prefix sqlcipher)"
+          CFLAGS="-I$SQLC/include -I$SQLC/include/sqlcipher" LDFLAGS="-L$SQLC/lib" \
+            pip install --no-binary sqlcipher3 "sqlcipher3>=0.5"
+          python -c "from sqlcipher3 import dbapi2; print('sqlcipher ok')"
+
+      - name: Install Click's Python packages
+        run: |
+          python -m pip install --upgrade pip wheel
+          grep -v '^sqlcipher3' pi-hub/requirements.txt > /tmp/hub-reqs.txt
+          pip install -r /tmp/hub-reqs.txt -r pc-companion/requirements.txt -r pc-companion/requirements-mac.txt
+          pip install torch -r pc-companion/requirements-images.txt
+          pip install "pyinstaller>=6.10" pytest pytest-asyncio
+
+      - name: Run the tests
+        run: |
+          (cd pi-hub && python -m pytest -q)
+          (cd pc-companion && QT_QPA_PLATFORM=offscreen python -m pytest -q)
+
+      - name: Make the app icon
+        run: |
+          QT_QPA_PLATFORM=offscreen python packaging/make_icon.py packaging/Click.iconset
+          iconutil -c icns packaging/Click.iconset -o packaging/Click.icns
+
+      - name: Build Click.app
+        run: pyinstaller --noconfirm --distpath dist --workpath build packaging/Click.spec
+
+      - name: Self-test the finished app
+        run: |
+          mkdir -p "$HOME/selftest"
+          HOME="$HOME/selftest" QT_QPA_PLATFORM=offscreen timeout 180 \
+            dist/Click.app/Contents/MacOS/Click --selftest | tee selftest.log
+          grep -q "SELFTEST OK" selftest.log
+
+      - name: Make Click.dmg
+        run: |
+          mkdir -p dmg && cp -R dist/Click.app dmg/ && ln -s /Applications dmg/Applications
+          hdiutil create -volname "Click" -srcfolder dmg -ov -format UDZO Click.dmg
+          ls -lh Click.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Click-mac
+          path: Click.dmg
+          retention-days: 14
+
+      - name: Publish as the latest release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Click for Mac (build ${{ github.run_number }})
+          make_latest: true
+          files: Click.dmg
+          body: |
+            **Install:** open Click.dmg, drag Click into Applications, then open Click.
+            The first time, macOS may say it can't check the app: open System Settings, then
+            Privacy & Security, scroll down and click "Open Anyway".
