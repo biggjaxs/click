@@ -166,7 +166,7 @@ Models stay loaded for 60 minutes (`keep_alive`) and are warmed up at start.
 - The chat is a floating, frameless window (Qt WebEngine showing the same chat app in a compact
   layout).
 - With no Pi, the "box" part runs inside the app on 127.0.0.1 and pairs itself automatically.
-  Memory is encrypted with SQLCipher, with the key in the macOS Keychain.
+  Memory is encrypted with SQLCipher. The key is in a private file (owner-only) in the app's settings folder; the Keychain was dropped because it can freeze waiting for an unlock prompt.
 - With a Pi, the tile shows the box's chat instead ("Use a Click box" in the menu bar).
 - WebEngine needs macOS 14+.
 

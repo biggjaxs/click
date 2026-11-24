@@ -37,7 +37,7 @@ thinking, and only holds your information for the length of one question.
   the menu bar.
 - **Ctrl+Alt+Esc** stops anything Click is doing, instantly.
 - Menu bar icon → **Show me Click's cursor** plays the cursor demo again.
-- Everything runs on your Mac. Memories are encrypted with a key in your Mac's Keychain.
+- Everything runs on your Mac. Memories are encrypted on your Mac.
 
 Needs macOS 14 (Sonoma) or newer. Apple Silicon (M1 or newer) is recommended, and 16 GB RAM is
 ideal. Image generation needs Apple Silicon.

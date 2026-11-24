@@ -2,14 +2,13 @@
 
 The "box" part (chat app, memory, brain) normally lives on the Pi. In standalone mode it runs inside
 this app on 127.0.0.1 only, and pairs itself with this computer's Companion automatically.
-Memory is encrypted with a key kept in the macOS Keychain (or a private file on other systems).
+Memory is encrypted with a key kept in a private file in the app's settings folder.
 """
 from __future__ import annotations
 
 import logging
 import os
 import secrets
-import subprocess
 import sys
 import threading
 import time
@@ -29,24 +28,17 @@ def hub_dir() -> Path:
 
 
 def _memory_key(config_dir: Path) -> str:
-    """64-hex-character key for the encrypted memory database."""
-    if sys.platform == "darwin":
-        service, account = "Click memory key", "click"
-        r = subprocess.run(["security", "find-generic-password", "-s", service, "-a", account, "-w"],
-                           capture_output=True, text=True)
-        if r.returncode == 0 and len(r.stdout.strip()) == 64:
-            return r.stdout.strip()
-        key = secrets.token_hex(32)
-        subprocess.run(["security", "add-generic-password", "-s", service, "-a", account, "-w", key, "-U"],
-                       capture_output=True, check=False)
-        return key
+    """64-hex-character key for the encrypted memory database, in a file only you can read.
+
+    (The macOS Keychain was tried first, but it can freeze waiting for an unlock prompt.)
+    """
     path = config_dir / "memory.key"
     if not path.exists():
         path.write_text(secrets.token_hex(32))
-        try:
-            path.chmod(0o600)
-        except OSError:
-            pass
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
     return path.read_text().strip()
 
 
