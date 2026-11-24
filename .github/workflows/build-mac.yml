@@ -58,8 +58,9 @@ jobs:
       - name: Self-test the finished app
         run: |
           mkdir -p "$HOME/selftest"
-          HOME="$HOME/selftest" QT_QPA_PLATFORM=offscreen timeout 180 \
-            dist/Click.app/Contents/MacOS/Click --selftest | tee selftest.log
+          # macOS has no `timeout` command; perl's alarm does the same job (stop after 180 s)
+          HOME="$HOME/selftest" QT_QPA_PLATFORM=offscreen perl -e 'alarm shift; exec @ARGV' 180 \
+            dist/Click.app/Contents/MacOS/Click --selftest 2>&1 | tee selftest.log
           grep -q "SELFTEST OK" selftest.log
 
       - name: Make Click.dmg
