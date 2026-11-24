@@ -18,12 +18,18 @@ thinking, and only holds your information for the length of one question.
 
 ## Install on your Mac (easiest: no Terminal, no Raspberry Pi)
 
-1. Download **Click.dmg** from the newest release on GitHub:
-   **github.com/hovlandbr/click → Releases** (top of the list).
-2. Open **Click.dmg** and drag **Click** onto **Applications**.
+1. Download Click from the newest release on GitHub: **github.com/biggjaxs/click → Releases**
+   (top of the list). Pick the file for your Mac:
+   - **Intel Mac** (Apple menu → About This Mac shows "Intel Core i5/i7/i9"): **Click-Intel.dmg**
+   - **M1, M2, M3 or M4**: **Click-AppleSilicon.dmg**
+2. Open the .dmg and drag **Click** onto **Applications**.
 3. Open **Click** from Applications.
    - The first time, macOS may say it can't check the app. Open **System Settings → Privacy &
      Security**, scroll down and click **Open Anyway**. You only do this once.
+   - If it says the app is "damaged" or there's no Open Anyway button, open Terminal and run
+     `xattr -dr com.apple.quarantine /Applications/Click.app`, then open Click again.
+   - "Not supported on this Mac" means the wrong file for your chip, or macOS older than 14.
+     Update for free: Apple menu → System Settings → General → Software Update.
 4. The Click tile appears in the **top-right corner** and sets itself up. It installs the AI
    engine and downloads Click's model (about 2–6 GB) with a progress bar.
 5. When it asks, allow **Screen Recording**, **Accessibility** and **Input Monitoring**. Each
@@ -39,8 +45,10 @@ thinking, and only holds your information for the length of one question.
 - Menu bar icon → **Show me Click's cursor** plays the cursor demo again.
 - Everything runs on your Mac. Memories are encrypted on your Mac.
 
-Needs macOS 14 (Sonoma) or newer. Apple Silicon (M1 or newer) is recommended, and 16 GB RAM is
-ideal. Image generation needs Apple Silicon.
+Needs macOS 14 (Sonoma) or newer (Ollama, the AI engine, requires it). Apple Silicon (M1 or
+newer) is fastest. Intel Macs work too, but slower, because the AI runs on the processor. Click
+uses its small 2B model there and reads the screen as text. 16 GB RAM is ideal. Image
+generation needs Apple Silicon.
 
 The rest of this README covers the **Click box** (Raspberry Pi) setup. With a box, your chats and
 memories live on the box and travel with it; the Mac app then connects to it via

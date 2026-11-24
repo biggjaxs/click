@@ -182,3 +182,18 @@ the Windows installer script still works.
 Neutral palette, one accent colour (#6d5dfc), simple line icons drawn for Click, and no emojis.
 Tool activity shows as quiet step lines with timings instead of coloured chips. Status lives in
 one small pill.
+
+## D24. Intel Macs
+The first Mac build was Apple-Silicon-only, and the user's laptop is an Intel Core i9, so GitHub
+now builds a native Intel version (`macos-15-intel` runner) by default. The Apple Silicon build
+runs on request, to save GitHub's limited free Mac build time.
+
+On Intel Macs Ollama runs on the processor only, so Click:
+- uses `qwen3-vl:2b-instruct`
+- uses a 4096-token context
+- answers screen questions from OCR text without attaching a screenshot (images are slow to
+  read on a CPU)
+- skips image generation
+
+Both builds need macOS 14+, because Ollama does
+([docs.ollama.com/macos](https://docs.ollama.com/macos)).
