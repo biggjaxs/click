@@ -227,6 +227,8 @@ class App:
             "protocol": 1, "pc_name": self.settings["pc_name"], **self.hardware,
             "models": {"chat": self.models["chat"], "vision": self.models["vision"]},
             "vision_in_chat": self.inference.vision_in_chat,
+            # On processor-only computers a screenshot costs many seconds to read; the OCR text is enough.
+            "cpu_only": self.hardware.get("device") == "cpu",
             "installed_models": await self.inference.installed_models(),
             "loaded_models": await self.inference.loaded_models(),
             "image": self.imagegen.capability(),

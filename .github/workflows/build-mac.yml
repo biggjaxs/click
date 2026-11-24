@@ -1,11 +1,22 @@
-# Builds Click.dmg on a GitHub Mac (Apple Silicon) every time the code changes on main,
-# runs the tests and a start-up self-test of the finished app, then publishes the .dmg as a Release.
+# Builds Click.dmg on GitHub's Macs, runs the tests and a start-up self-test of the finished app,
+# then publishes the .dmg as a Release.
+#
+# Which Macs: pushes to main build the INTEL version (the laptop Click is used on now).
+# To build for Apple Silicon (M1-M4) or both, run this workflow by hand (Actions tab ->
+# "Build Click for Mac" -> Run workflow) and pick "apple" or "both". Mac build time is limited on
+# GitHub's free plan, so only the needed one is built.
 name: Build Click for Mac
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      macs:
+        description: "Which Macs to build for"
+        type: choice
+        options: [intel, apple, both]
+        default: intel
 
 permissions:
   contents: write
@@ -15,8 +26,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        run: |
+          choice="${{ github.event.inputs.macs || 'intel' }}"
+          intel='{"name":"Intel","runner":"macos-15-intel","images":false}'
+          apple='{"name":"AppleSilicon","runner":"macos-15","images":true}'
+          case "$choice" in
+            apple) m="[$apple]";;
+            both)  m="[$intel,$apple]";;
+            *)     m="[$intel]";;
+          esac
+          echo "matrix={\"include\":$m}" >> "$GITHUB_OUTPUT"
+
   build:
-    runs-on: macos-15
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -39,8 +71,11 @@ jobs:
           python -m pip install --upgrade pip wheel
           grep -v '^sqlcipher3' pi-hub/requirements.txt > /tmp/hub-reqs.txt
           pip install -r /tmp/hub-reqs.txt -r pc-companion/requirements.txt -r pc-companion/requirements-mac.txt
-          pip install torch -r pc-companion/requirements-images.txt
           pip install "pyinstaller>=6.10" pytest pytest-asyncio
+
+      - name: Install image generation (Apple Silicon only)
+        if: matrix.images
+        run: pip install torch -r pc-companion/requirements-images.txt
 
       - name: Run the tests
         run: |
@@ -62,27 +97,30 @@ jobs:
           HOME="$HOME/selftest" QT_QPA_PLATFORM=offscreen perl -e 'alarm shift; exec @ARGV' 180 \
             dist/Click.app/Contents/MacOS/Click --selftest 2>&1 | tee selftest.log
           grep -q "SELFTEST OK" selftest.log
+          file dist/Click.app/Contents/MacOS/Click
 
-      - name: Make Click.dmg
+      - name: Make the .dmg
         run: |
           mkdir -p dmg && cp -R dist/Click.app dmg/ && ln -s /Applications dmg/Applications
-          hdiutil create -volname "Click" -srcfolder dmg -ov -format UDZO Click.dmg
-          ls -lh Click.dmg
+          hdiutil create -volname "Click" -srcfolder dmg -ov -format UDZO "Click-${{ matrix.name }}.dmg"
+          ls -lh "Click-${{ matrix.name }}.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Click-mac
-          path: Click.dmg
+          name: Click-${{ matrix.name }}
+          path: Click-${{ matrix.name }}.dmg
           retention-days: 14
 
-      - name: Publish as the latest release
+      - name: Publish as a release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Click for Mac (build ${{ github.run_number }})
           make_latest: true
-          files: Click.dmg
+          files: Click-${{ matrix.name }}.dmg
           body: |
-            **Install:** open Click.dmg, drag Click into Applications, then open Click.
-            The first time, macOS may say it can't check the app: open System Settings, then
-            Privacy & Security, scroll down and click "Open Anyway".
+            **Which file:** Intel Mac (Core i5/i7/i9) -> `Click-Intel.dmg`. M1/M2/M3/M4 -> `Click-AppleSilicon.dmg`.
+            Needs macOS 14 (Sonoma) or newer.
+
+            **Install:** open the .dmg, drag Click into Applications, then open Click.
+            If macOS blocks it: System Settings -> Privacy & Security -> scroll down -> "Open Anyway".

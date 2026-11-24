@@ -18,6 +18,8 @@ TIERS = {
     "cpu": {"chat": "qwen3-vl:4b-instruct", "vision": "qwen3-vl:4b-instruct", "draft": "stabilityai/sd-turbo", "quality": "stabilityai/sd-turbo", "image": False},
     "gpu_mid": {"chat": "qwen3-vl:8b-instruct", "vision": "qwen3-vl:8b-instruct", "draft": "stabilityai/sdxl-turbo", "quality": "stabilityai/stable-diffusion-xl-base-1.0", "image": True},
     "gpu_big": {"chat": "qwen3-vl:8b-instruct", "vision": "qwen3-vl:8b-instruct", "draft": "stabilityai/sdxl-turbo", "quality": "black-forest-labs/FLUX.1-schnell", "image": True},
+    # Intel Macs: Ollama runs on the processor only, so use the small, fast model and no images.
+    "intel_mac": {"chat": "qwen3-vl:2b-instruct", "vision": "qwen3-vl:2b-instruct", "draft": "stabilityai/sd-turbo", "quality": "stabilityai/sd-turbo", "image": False},
     "apple_small": {"chat": "qwen3-vl:2b-instruct", "vision": "qwen3-vl:2b-instruct", "draft": "stabilityai/sd-turbo", "quality": "stabilityai/sd-turbo", "image": True},
     "apple_mid": {"chat": "qwen3-vl:4b-instruct", "vision": "qwen3-vl:4b-instruct", "draft": "stabilityai/sdxl-turbo", "quality": "stabilityai/sdxl-turbo", "image": True},
     "apple_big": {"chat": "qwen3-vl:8b-instruct", "vision": "qwen3-vl:8b-instruct", "draft": "stabilityai/sdxl-turbo", "quality": "stabilityai/stable-diffusion-xl-base-1.0", "image": True},
@@ -65,6 +67,10 @@ def detect() -> dict:
     if sys.platform == "darwin" and platform.machine() == "arm64":
         info.update(gpu="Apple Silicon (unified memory)", vram_gb=ram, device="mps")
         info["tier"] = "apple_big" if ram >= 30 else "apple_mid" if ram >= 14 else "apple_small"  # "16 GB" reports ~15.x
+        return info
+    if sys.platform == "darwin":  # Intel Mac
+        info["gpu"] = "Intel Mac (AI runs on the processor)"
+        info["tier"] = "intel_mac"
         return info
     nv = _nvidia()
     if nv:

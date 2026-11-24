@@ -52,6 +52,11 @@ class Inference:
             return []
 
     @property
+    def num_ctx(self) -> int:
+        """Smaller working memory on processor-only computers = faster answers."""
+        return 4096 if self.models.get("image_device") == "cpu" else 8192
+
+    @property
     def vision_in_chat(self) -> bool:
         """True when the chat model can see images itself (no separate vision step needed)."""
         chat = self.models["chat"].lower()
@@ -68,7 +73,7 @@ class Inference:
     async def chat(self, payload: dict, emit: Callable[[dict], Awaitable[None]]) -> dict:
         model = self.models["vision"] if payload.get("role") == "vision" else self.models["chat"]
         body = {"model": model, "messages": payload.get("messages", []), "stream": True, "keep_alive": KEEP_ALIVE,
-                "options": {"num_ctx": 8192, **(payload.get("options") or {})}}
+                "options": {"num_ctx": self.num_ctx, **(payload.get("options") or {})}}
         if payload.get("tools"):
             body["tools"] = payload["tools"]
         if payload.get("format"):

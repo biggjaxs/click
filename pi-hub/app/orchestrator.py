@@ -155,7 +155,8 @@ class Orchestrator:
         deps = self.deps
         if not (deps.link.connected and deps.permissions.enabled("screen_reading") and SCREEN_INTENT.search(text)):
             return None
-        vision = bool(deps.link.capabilities.get("vision_in_chat"))
+        caps = deps.link.capabilities
+        vision = bool(caps.get("vision_in_chat")) and not caps.get("cpu_only")
         await send({"type": "tool", "name": "get_screen", "status": "running"})
         await deps.narrate("Looking at your screen")
         try:
