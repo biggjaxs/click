@@ -12,6 +12,7 @@ import asyncio
 import base64
 import datetime as dt
 import json
+import os
 import logging
 import re
 import time
@@ -98,6 +99,11 @@ class Orchestrator:
 
     def _save_message(self, conv_id: int, role: str, content: str, meta: dict | None = None) -> int:
         now = time.time()
+        if not self.deps.db.one("SELECT id FROM conversations WHERE id = ?", (conv_id,)):
+            # The chat refers to a conversation that's gone (e.g. data was repaired): bring it back
+            # instead of failing with "FOREIGN KEY constraint failed".
+            self.deps.db.execute("INSERT INTO conversations(id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                                 (conv_id, " ".join(content.split())[:60] or "Chat", now, now))
         mid = self.deps.db.execute(
             "INSERT INTO messages(conversation_id, role, content, meta, created_at) VALUES (?, ?, ?, ?, ?)",
             (conv_id, role, content, json.dumps(meta or {}), now))
@@ -145,6 +151,8 @@ class Orchestrator:
             parts.append(FALLBACK_NOTE)
         if has_tools:
             parts.append(TOOL_RULES)
+        if self.fast:
+            parts.append("Keep every answer short: one to three sentences, unless the user asks for more detail.")
         parts.append("Each user message may start with a <context> block (time, memories, screen). "
                      "Use it when relevant; never repeat it back.")
         return "\n\n".join(parts)
@@ -252,6 +260,7 @@ class Orchestrator:
 
         # Quick memory commands: "remember that…" / "forget that…"
         memory_note = ""
+        quick: Reply | None = None  # "remember X" / "forget X" are answered instantly, without the AI model
         m_rem, m_forget = REMEMBER_RE.match(text), FORGET_RE.match(text)
         if m_rem and not incognito:
             if perms.enabled("memory_saving"):
@@ -259,16 +268,16 @@ class Orchestrator:
                                                  f"conversation:{conversation_id}", explicit=True)
                 if res["status"] in ("saved", "updated", "duplicate"):
                     await send({"type": "memory_saved", "facts": [res]})
-                    memory_note = f"(You just saved this to memory: '{res['text']}'. Confirm briefly.)"
+                    quick = Reply(f"Got it. I'll remember: {res['text']}.")
                 else:
-                    memory_note = f"(Saving to memory was blocked: {res['reason']}. Tell the user why.)"
+                    quick = Reply(f"I didn't save that: {res['reason']}")
             else:
-                memory_note = "(Memory saving is paused, so nothing was saved. Tell the user.)"
+                quick = Reply("Memory saving is paused, so I didn't save that. You can turn it on in Settings.")
         elif m_forget:
             removed = await deps.memory.forget(m_forget.group(1).strip().rstrip("."))
             await send({"type": "memory_forgotten", "facts": removed})
-            memory_note = (f"(You deleted these memories: {removed}. Confirm briefly.)" if removed
-                           else "(Nothing matching was in memory. Say so.)")
+            quick = Reply(f"Done. I forgot {len(removed)} thing{'s' if len(removed) != 1 else ''}." if removed
+                          else "I didn't have anything like that saved.")
 
         attach_text, image_upload_ids = await self._attachment_context(upload_ids, text, send)
         user_meta = {"uploads": upload_ids}
@@ -291,8 +300,8 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.exception("recall failed")
 
-        point_note = None
-        if backend.source == "pc" and mentions_clicky(text):
+        point_note = quick
+        if point_note is None and backend.source == "pc" and mentions_clicky(text):
             point_note = await self._summon_clicky(text, send)
         if point_note is None:
             point_note = await self._direct_task(text, send) if backend.source == "pc" else None
@@ -391,7 +400,10 @@ class Orchestrator:
         await send({"type": "tool", "name": "find_ui_element", "status": "running", "caption": f"Looking for '{target}'"})
         await deps.narrate(f"Looking for '{target}'")
         try:
-            found = await deps.link.request("screen", "find_ui_element", {"query": target}, timeout=30)
+            req = {"query": target}
+            if not (m_open or SCREENISH.search(text)):
+                req["deep"] = False  # a general "where" question: don't read the whole screen (slow)
+            found = await deps.link.request("screen", "find_ui_element", req, timeout=30)
         except PcError as exc:
             await send({"type": "tool", "name": "find_ui_element", "status": "failed", "error": str(exc)})
             return Reply(f"I couldn't look for \u201c{target}\u201d: {exc}")
@@ -441,6 +453,8 @@ class Orchestrator:
         deps = self.deps
         if getattr(self, "_warming", False) or not deps.link.connected or len(partial.strip()) < 3:
             return
+        if self.fast:
+            return  # on processor-only computers the warm-up made the real answer wait in line behind it
         self._warming = True
         try:
             tools = select_tools(deps, partial)
@@ -485,7 +499,7 @@ class Orchestrator:
         if source == "pi":
             await send({"type": "notice", "text": "Your computer is offline, so the small backup model on the Pi is answering."})
         tools = select_tools(deps, text) if source == "pc" and "Don't call any tools" not in (memory_note or "") else []
-        options = {"num_predict": 400} if self.fast else {}
+        options = {"num_predict": 220} if self.fast else {}
         max_rounds = 3 if self.fast else deps.cfg.max_tool_rounds
         messages = [{"role": "system", "content": self._system_prompt(source, bool(tools))}]
         messages += self._history(conversation_id, incognito_key)
@@ -515,6 +529,13 @@ class Orchestrator:
                     elif ev["type"] == "done":
                         model = ev.get("model", model)
             except (PcError, BackendUnavailable) as exc:
+                if source == "pc" and os.environ.get("CLICK_STANDALONE"):
+                    # No Pi box: the computer IS Click, so there's no backup to switch to.
+                    await send({"type": "error", "message": "Click's AI engine is taking too long to answer. "
+                                "It may still be starting up: try again in a moment. If it keeps happening, "
+                                "choose Check Clicky\u2026 in the menu bar."})
+                    answer_parts.append("(Sorry, the AI engine didn't answer in time. Please try again.)")
+                    break
                 if source == "pc":
                     # PC dropped mid-answer: switch to the Pi's backup model and say so.
                     await send({"type": "notice", "text": f"Lost the connection to your computer ({exc}). "

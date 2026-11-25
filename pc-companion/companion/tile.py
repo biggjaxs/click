@@ -254,10 +254,10 @@ class SetupView(QWidget):
             self.perm_box.addWidget(row)
 
 
-def _rr_point(r: QRectF, rad: float, u: float):
+def _rr_point(r: QRectF, rad: float, u: float, panel_r: float = PANEL_R):
     """A point (and the outward direction) at fraction u around a rounded rectangle grown by
-    rad - PANEL_R around r."""
-    grow = rad - PANEL_R
+    rad - panel_r around r."""
+    grow = rad - panel_r
     x0, y0, x1, y1 = r.left() - grow, r.top() - grow, r.right() + grow, r.bottom() + grow
     w, h = x1 - x0 - 2 * rad, y1 - y0 - 2 * rad
     arc = math.pi * rad / 2
@@ -285,16 +285,17 @@ def _rr_point(r: QRectF, rad: float, u: float):
     return QPointF(x0, y0), QPointF(0, -1)
 
 
-def goo_path(panel: QRectF, panel_r: float, t: float, n: int = 140) -> QPainterPath:
+def goo_path(panel: QRectF, panel_r: float, t: float, n: int = 140, off: float = GOO_OFF,
+             amp: float = GOO_AMP) -> QPainterPath:
     """A wavy, flowing outline around the panel: always outside it, never still, never fast."""
     pts = []
     for i in range(n):
         u = i / n
-        pt, nrm = _rr_point(panel, panel_r + GOO_OFF, u)
+        pt, nrm = _rr_point(panel, panel_r + off, u, panel_r)
         a = 2 * math.pi * u
-        wob = GOO_AMP * (0.5 * math.sin(4 * a + t * 0.8) + 0.3 * math.sin(7 * a - t * 1.1)
+        wob = amp * (0.5 * math.sin(4 * a + t * 0.8) + 0.3 * math.sin(7 * a - t * 1.1)
                          + 0.2 * math.sin(11 * a + t * 1.6) + 0.15 * math.sin(2 * a - t * 0.5))
-        wob = max(-GOO_OFF + 4, wob)  # the goo never cuts into the chat
+        wob = max(-off + 4, wob)  # the goo never cuts into the chat
         pts.append(QPointF(pt.x() + nrm.x() * wob, pt.y() + nrm.y() * wob))
     path = QPainterPath()
     mid = lambda a, b: QPointF((a.x() + b.x()) / 2, (a.y() + b.y()) / 2)  # noqa: E731
@@ -303,6 +304,64 @@ def goo_path(panel: QRectF, panel_r: float, t: float, n: int = 140) -> QPainterP
         path.quadTo(pts[i], mid(pts[i], pts[(i + 1) % n]))
     path.closeSubpath()
     return path
+
+
+def paint_goo(p: QPainter, area: QRectF, margin: float, panel_r: float, t: float, accent_hex: str,
+              off: float = GOO_OFF, amp: float = GOO_AMP, droplets: bool = True) -> None:
+    """A floating ball of goo: a flat, calm panel inside (easy to read), wrapped in slowly flowing
+    liquid in the orb's colours (cyan to blue), with little droplets drifting by.
+    Used by the full chat and the Ask panel, so both look the same."""
+    p.setRenderHint(QPainter.Antialiasing)
+    accent = QColor(accent_hex)
+    cyan = QColor("#22d3ee")
+    panel = area.adjusted(margin, margin, -margin, -margin)
+    goo = goo_path(panel, panel_r, t, off=off, amp=amp)
+    # 1. soft glow in space around the goo
+    for width, alpha in ((22, 18), (12, 30)):
+        g = QColor(cyan)
+        g.setAlpha(alpha)
+        p.setPen(QPen(g, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(goo)
+    # 2. the goo itself, coloured like the orb, with its light slowly drifting
+    c = panel.center()
+    drift = QPointF(c.x() + panel.width() * 0.25 * math.cos(t * 0.35), c.y() + panel.height() * 0.25 * math.sin(t * 0.3))
+    body = QRadialGradient(drift, max(panel.width(), panel.height()) * 0.75)
+    body.setColorAt(0.0, cyan)
+    body.setColorAt(0.55, accent)
+    body.setColorAt(1.0, accent.darker(170))
+    p.setPen(Qt.NoPen)
+    p.setBrush(body)
+    p.drawPath(goo)
+    # 3. droplets floating beside it (goo in space)
+    if droplets:
+        for k, (u0, speed, r0) in enumerate(((0.12, 0.010, 7.5), (0.61, -0.008, 5.5))):
+            u = (u0 + t * speed) % 1.0
+            pt, nrm = _rr_point(panel, panel_r + off, u, panel_r)
+            dist = amp + 9 + 5 * math.sin(t * 0.6 + k * 2)
+            dc = QPointF(pt.x() + nrm.x() * dist, pt.y() + nrm.y() * dist)
+            dg = QRadialGradient(dc + QPointF(-r0 * 0.3, -r0 * 0.3), r0 * 1.4)
+            dg.setColorAt(0, cyan)
+            dg.setColorAt(1, accent)
+            p.setBrush(dg)
+            p.drawEllipse(dc, r0 * (1 + 0.08 * math.sin(t * 1.3 + k)), r0 * (1 - 0.08 * math.sin(t * 1.3 + k)))
+    # 4. shine on the goo, like light on the orb
+    inner = QPainterPath()
+    inner.addRoundedRect(panel, panel_r, panel_r)
+    p.save()
+    p.setClipPath(goo.subtracted(inner))
+    shine = QRadialGradient(QPointF(panel.x() + panel.width() * 0.25, panel.y()), panel.width() * 0.55)
+    shine.setColorAt(0, QColor(255, 255, 255, 150))
+    shine.setColorAt(1, QColor(255, 255, 255, 0))
+    p.fillRect(area, shine)
+    p.restore()
+    # 5. the flat panel inside (2D, calm, easy to read)
+    p.fillPath(inner, QColor(13, 13, 19, 250))
+    edge = QColor(cyan)
+    edge.setAlpha(70)
+    p.setPen(QPen(edge, 1.2))
+    p.setBrush(Qt.NoBrush)
+    p.drawPath(inner)
 
 
 class Tile(QWidget):
@@ -380,60 +439,8 @@ class Tile(QWidget):
             self.update()
 
     def paintEvent(self, _):
-        """The chat as a floating ball of goo: a flat, calm panel inside (easy to read), wrapped in
-        slowly flowing liquid in the orb's colours (cyan to blue), with little droplets drifting by."""
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        t = self._glow_t
-        accent = QColor(self.accent)
-        cyan = QColor("#22d3ee")
-        panel = QRectF(self.rect()).adjusted(GLOW, GLOW, -GLOW, -GLOW)
-        goo = goo_path(panel, PANEL_R, t)
-        # 1. soft glow in space around the goo
-        for width, alpha in ((22, 18), (12, 30)):
-            g = QColor(cyan)
-            g.setAlpha(alpha)
-            p.setPen(QPen(g, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
-            p.setBrush(Qt.NoBrush)
-            p.drawPath(goo)
-        # 2. the goo itself, coloured like the orb, with its light slowly drifting
-        c = panel.center()
-        drift = QPointF(c.x() + panel.width() * 0.25 * math.cos(t * 0.35), c.y() + panel.height() * 0.25 * math.sin(t * 0.3))
-        body = QRadialGradient(drift, max(panel.width(), panel.height()) * 0.75)
-        body.setColorAt(0.0, cyan)
-        body.setColorAt(0.55, accent)
-        body.setColorAt(1.0, accent.darker(170))
-        p.setPen(Qt.NoPen)
-        p.setBrush(body)
-        p.drawPath(goo)
-        # 3. droplets floating beside it (goo in space)
-        for k, (u0, speed, r0) in enumerate(((0.12, 0.010, 7.5), (0.61, -0.008, 5.5))):
-            u = (u0 + t * speed) % 1.0
-            pt, nrm = _rr_point(panel, PANEL_R + GOO_OFF, u)
-            dist = GOO_AMP + 9 + 5 * math.sin(t * 0.6 + k * 2)
-            dc = QPointF(pt.x() + nrm.x() * dist, pt.y() + nrm.y() * dist)
-            dg = QRadialGradient(dc + QPointF(-r0 * 0.3, -r0 * 0.3), r0 * 1.4)
-            dg.setColorAt(0, cyan)
-            dg.setColorAt(1, accent)
-            p.setBrush(dg)
-            p.drawEllipse(dc, r0 * (1 + 0.08 * math.sin(t * 1.3 + k)), r0 * (1 - 0.08 * math.sin(t * 1.3 + k)))
-        # 4. shine on the goo, like light on the orb
-        inner = QPainterPath()
-        inner.addRoundedRect(panel, PANEL_R, PANEL_R)
-        p.save()
-        p.setClipPath(goo.subtracted(inner))
-        shine = QRadialGradient(QPointF(panel.x() + panel.width() * 0.25, panel.y()), panel.width() * 0.55)
-        shine.setColorAt(0, QColor(255, 255, 255, 150))
-        shine.setColorAt(1, QColor(255, 255, 255, 0))
-        p.fillRect(QRectF(self.rect()), shine)
-        p.restore()
-        # 5. the flat panel inside (2D, calm, easy to read)
-        p.fillPath(inner, QColor(13, 13, 19, 250))
-        edge = QColor(cyan)
-        edge.setAlpha(70)
-        p.setPen(QPen(edge, 1.2))
-        p.setBrush(Qt.NoBrush)
-        p.drawPath(inner)
+        paint_goo(p, QRectF(self.rect()), GLOW, PANEL_R, self._glow_t, self.accent)
         p.end()
 
     # ---- window behaviour ------------------------------------------------------------------------------

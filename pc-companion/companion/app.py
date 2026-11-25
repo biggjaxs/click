@@ -664,7 +664,7 @@ class App:
         return self.screen.get_ui_elements(p.get("window"))
 
     def screen_find_element(self, p: dict) -> dict:
-        return self.screen.find_ui_element(p.get("query", ""), p.get("window"))
+        return self.screen.find_ui_element(p.get("query", ""), p.get("window"), deep=p.get("deep", True))
 
     def files_list(self, p: dict) -> dict:
         return self.files.list_folder(p.get("path", ""))

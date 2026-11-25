@@ -742,6 +742,11 @@ class Tray(QObject):
         self.icon.setToolTip("Click")
         self.icon.activated.connect(self._activated)
         menu = QMenu()
+        from . import __version__
+
+        self.version_action = QAction(f"Click version {__version__}")
+        self.version_action.setEnabled(False)
+        menu.addAction(self.version_action)
         self.status_action = QAction("Starting…")
         self.status_action.setEnabled(False)
         menu.addAction(self.status_action)

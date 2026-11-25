@@ -96,6 +96,7 @@ class EmbeddedHub:
         os.environ["CLICK_DATA_DIR"] = str(self.data_dir)
         os.environ["CLICK_OLLAMA_URL"] = self.settings["ollama_url"]
         os.environ["CLICK_PC_HOST"] = "127.0.0.1"
+        os.environ["CLICK_STANDALONE"] = "1"  # no Pi box: this computer is Click
         # Same machine: if the link ever drops, the "backup" is simply the same model.
         os.environ["CLICK_FALLBACK_MODEL"] = self.chat_model
         try:

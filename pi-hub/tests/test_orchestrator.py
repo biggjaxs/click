@@ -350,3 +350,14 @@ def test_open_wifi_settings_is_one_instant_task(services):
     task = next(c for c in calls if c[:2] == ("skills", "run"))
     assert task[2]["plan"] == [{"skill": "open_settings", "pane": "Wi-Fi"}]
     assert out["answer"].startswith("Done")
+
+
+def test_remember_is_instant_and_missing_conversation_does_not_crash(services):
+    _wire(services, {})
+    out = run(services.orchestrator.handle(send=Recorder(), text="Remember that I like short answers",
+                                           conversation_id=None, upload_ids=[], incognito_key=None, state=_state()))
+    assert out["answer"].startswith("Got it") and out["model"] == "clicky"
+    # a chat pointing at a conversation that no longer exists (e.g. after a data repair) still works
+    out = run(services.orchestrator.handle(send=Recorder(), text="remember that my dog is Max", conversation_id=987654,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    assert out["answer"].startswith("Got it")

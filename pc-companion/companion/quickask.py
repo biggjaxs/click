@@ -10,12 +10,13 @@ import json
 import threading
 
 from PySide6.QtCore import QEasingCurve, QObject, QPropertyAnimation, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-W = 380
+W = 380        # the flat panel's width
+GOO_M = 40     # room around it for the flowing goo (same look as the full chat and the orb)
 
 
 class _Link(QObject):
@@ -63,7 +64,11 @@ class QuickAsk(QWidget):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_MacAlwaysShowToolWindow)
-        self.setFixedWidth(W)
+        self.setFixedWidth(W + 2 * GOO_M)
+        self._goo_t = 0.0
+        self._goo = QTimer(self)
+        self._goo.timeout.connect(self._tick_goo)
+        self._goo.start(80)  # slow and gentle
         self.accent = accent
         self.conversation_id = None
         self.answer = ""
@@ -72,7 +77,7 @@ class QuickAsk(QWidget):
         self.link.event.connect(self._on_event)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 16, 18, 14)
+        lay.setContentsMargins(18 + GOO_M, 16 + GOO_M, 18 + GOO_M, 14 + GOO_M)
         lay.setSpacing(10)
         self.status = QLabel("Connecting to Click…")
         self.status.setStyleSheet("color: rgba(255,255,255,0.55); font-size: 11.5px;")
@@ -129,17 +134,18 @@ class QuickAsk(QWidget):
         self.adjustSize()
 
     # ---- look: dark glass card with a soft accent glow ---------------------------------------------------
+    def _tick_goo(self):
+        if self.isVisible():
+            self._goo_t += 0.08
+            self.update()
+
     def paintEvent(self, _):
+        from PySide6.QtCore import QRectF
+
+        from .tile import paint_goo
+
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        r = self.rect().adjusted(1, 1, -1, -1)
-        path = QPainterPath()
-        path.addRoundedRect(r, 18, 18)
-        p.fillPath(path, QColor(20, 20, 26, 238))
-        glow = QColor(self.accent)
-        glow.setAlpha(90)
-        p.setPen(glow)
-        p.drawPath(path)
+        paint_goo(p, QRectF(self.rect()), GOO_M, 20, self._goo_t, self.accent, off=10, amp=9)
         p.end()
 
     # ---- showing / hiding ------------------------------------------------------------------------------------
@@ -147,7 +153,7 @@ class QuickAsk(QWidget):
         geo = (bubble.screen() or QApplication.primaryScreen()).availableGeometry()
         b = bubble.frameGeometry()
         x = min(max(geo.left() + 8, b.right() - W + 2), geo.right() - W - 8)
-        self.move(x, b.bottom() + 2)
+        self.move(x - GOO_M, b.bottom() + 2 - GOO_M + 14)
 
     def toggle(self, bubble):
         if self.isVisible():

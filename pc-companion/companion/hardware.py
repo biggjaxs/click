@@ -18,8 +18,9 @@ TIERS = {
     "cpu": {"chat": "qwen3-vl:4b-instruct", "vision": "qwen3-vl:4b-instruct", "draft": "stabilityai/sd-turbo", "quality": "stabilityai/sd-turbo", "image": False},
     "gpu_mid": {"chat": "qwen3-vl:8b-instruct", "vision": "qwen3-vl:8b-instruct", "draft": "stabilityai/sdxl-turbo", "quality": "stabilityai/stable-diffusion-xl-base-1.0", "image": True},
     "gpu_big": {"chat": "qwen3-vl:8b-instruct", "vision": "qwen3-vl:8b-instruct", "draft": "stabilityai/sdxl-turbo", "quality": "black-forest-labs/FLUX.1-schnell", "image": True},
-    # Intel Macs: Ollama runs on the processor only, so use the small, fast model and no images.
-    "intel_mac": {"chat": "qwen3-vl:2b-instruct", "vision": "qwen3-vl:2b-instruct", "draft": "stabilityai/sd-turbo", "quality": "stabilityai/sd-turbo", "image": False},
+    # Intel Macs: Ollama runs on the processor only. Chat uses a small TEXT model (much faster on Intel
+    # processors than a vision model); the vision model is only used when Click must look at a picture.
+    "intel_mac": {"chat": "qwen2.5:1.5b", "vision": "qwen3-vl:2b-instruct", "draft": "stabilityai/sd-turbo", "quality": "stabilityai/sd-turbo", "image": False},
     "apple_small": {"chat": "qwen3-vl:2b-instruct", "vision": "qwen3-vl:2b-instruct", "draft": "stabilityai/sd-turbo", "quality": "stabilityai/sd-turbo", "image": True},
     "apple_mid": {"chat": "qwen3-vl:4b-instruct", "vision": "qwen3-vl:4b-instruct", "draft": "stabilityai/sdxl-turbo", "quality": "stabilityai/sdxl-turbo", "image": True},
     "apple_big": {"chat": "qwen3-vl:8b-instruct", "vision": "qwen3-vl:8b-instruct", "draft": "stabilityai/sdxl-turbo", "quality": "stabilityai/stable-diffusion-xl-base-1.0", "image": True},

@@ -270,7 +270,7 @@ class ScreenService:
         els = self.platform.ui_elements(win)
         return {"window": win.public(), "elements": self._elements_payload(els)}
 
-    def find_ui_element(self, query: str, window: str | None = None, **_) -> dict:
+    def find_ui_element(self, query: str, window: str | None = None, deep: bool = True, **_) -> dict:
         """Find something the user asked about. Looks, in order, at: the Dock (apps), the menu bar
         (Wi-Fi, battery, app menus), buttons in open windows, then visible text on screen.
         Click's own windows (the chat, the orb) are never matched."""
@@ -292,7 +292,11 @@ class ScreenService:
                     add(el, boost)
             except Exception:  # noqa: BLE001
                 pass
-        wins = [self._find_window(window)] if window else self.platform.list_windows()[:14]
+        # Clicky's built-in Mac map (Apple menu, Wi-Fi, Control Center, Dock, Trash...) works without
+        # permissions and instantly; when it knows the thing, skip the slow window-by-window search.
+        landmark = self._map_hit(query)
+        wins = [] if landmark is not None and not window else \
+            ([self._find_window(window)] if window else self.platform.list_windows()[:4])
         for i, win in enumerate(wins):
             if self._blocked(win):
                 continue
@@ -302,7 +306,6 @@ class ScreenService:
         source = "accessibility"
         # Clicky's built-in Mac map: knows where the Apple menu, Wi-Fi, Control Center, Dock, Trash... are,
         # even without permissions. A precise Accessibility match still wins.
-        landmark = self._map_hit(query)
         best = max((sc for sc, _ in scored), default=0.0)
         if landmark is not None:
             if best < 0.95:
@@ -311,7 +314,7 @@ class ScreenService:
             else:
                 top = max(scored, key=lambda s: s[0])[1]
                 top.extra.setdefault("note", landmark.extra.get("note", ""))
-        if not scored or max(sc for sc, _ in scored) < 0.85:
+        if (not scored or max(sc for sc, _ in scored) < 0.85) and landmark is None and deep:
             for sc, el in self._find_by_text(q):
                 if not any(_overlaps(el.rect, r) for r in own):
                     scored.append((sc, el))

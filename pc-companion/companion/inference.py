@@ -10,7 +10,31 @@ import httpx
 
 
 KEEP_ALIVE = "30m"  # keep the model loaded between questions (reloading costs seconds); freed after 30 idle min
-THREADS = max(2, (__import__("os").cpu_count() or 4) - 2)  # leave cores free so the computer never bogs down
+def _physical_cores() -> int:
+    """The AI engine runs fastest with one thread per REAL core. Intel chips report twice as many
+    (hyper-threading); using those extra threads makes answers slower, not faster. A 2018 i9 = 6."""
+    import os
+    import subprocess
+    import sys
+
+    if sys.platform == "darwin":
+        try:
+            return int(subprocess.run(["sysctl", "-n", "hw.physicalcpu"], capture_output=True, text=True,
+                                      timeout=3).stdout.strip())
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        import psutil
+
+        n = psutil.cpu_count(logical=False)
+        if n:
+            return n
+    except Exception:  # noqa: BLE001
+        pass
+    return max(2, (os.cpu_count() or 4) // 2)
+
+
+THREADS = max(2, _physical_cores())
 
 
 class InferenceError(RuntimeError):
