@@ -54,9 +54,13 @@ class Signer:
         tmp = Path(tempfile.mkdtemp())
         try:
             key, cert, p12 = tmp / "k.pem", tmp / "c.pem", tmp / "s.p12"
+            # an exact settings file, so no default extensions sneak in (codesign rejects unknown ones)
+            cfg = tmp / "req.cnf"
+            cfg.write_text(f"[req]\ndistinguished_name=dn\nprompt=no\nx509_extensions=ext\n[dn]\nCN={NAME}\n"
+                           "[ext]\nbasicConstraints=critical,CA:false\nkeyUsage=critical,digitalSignature\n"
+                           "extendedKeyUsage=critical,codeSigning\n")
             r = _run("openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert),
-                     "-days", "7300", "-subj", f"/CN={NAME}", "-addext", "basicConstraints=critical,CA:false",
-                     "-addext", "keyUsage=critical,digitalSignature", "-addext", "extendedKeyUsage=critical,codeSigning")
+                     "-days", "7300", "-config", str(cfg))
             if r.returncode:
                 raise RuntimeError(f"couldn't make a signing key: {r.stderr.strip()[:200]}")
             p12pw = secrets.token_hex(16)
