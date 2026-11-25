@@ -132,7 +132,7 @@ class Signer:
         """Stamp a copy of Click (not the running one) with this Mac's identity, and check it."""
         ident = self.identity()
         _run("xattr", "-dr", "com.apple.quarantine", str(app))
-        cmd = ["codesign", "--force", "--deep", "--timestamp=none", "--keychain", str(self.keychain), "-s", ident]
+        cmd = ["codesign", "--force", "--deep", "--timestamp=none", "-s", ident]
         ent = self._entitlements(app)
         if ent:
             cmd += ["--options", "runtime", "--entitlements", str(ent)]
@@ -147,7 +147,8 @@ class Signer:
             if str(self.keychain) not in before and before:
                 _run("security", "list-keychains", "-d", "user", "-s", *before)
         if r.returncode:
-            raise RuntimeError(f"signing failed: {r.stderr.strip()[-300:]}")
+            diag = _run("security", "find-identity", "-v", "-p", "codesigning").stdout.strip()[-300:]
+            raise RuntimeError(f"signing failed: {r.stderr.strip()[-300:]} | identities: {diag}")
         r = _run("codesign", "--verify", "--deep", str(app))
         if r.returncode:
             raise RuntimeError(f"the signed app didn't verify: {r.stderr.strip()[-300:]}")
