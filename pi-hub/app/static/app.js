@@ -209,6 +209,7 @@ function handleEvent(ev) {
   const msg = state.current;
   switch (ev.type) {
     case "status": applyStatus(ev); break;
+    case "preview": showPreview(ev); break;
     case "conversation":
       state.conversationId = ev.id; loadConversations(); break;
     case "token":
@@ -339,6 +340,7 @@ async function submit(text) {
   const uploads = state.uploads.slice();
   if (!send({ type: "send", text: text || "(see attachment)", conversation_id: state.incognito ? null : state.conversationId,
               uploads: uploads.map(u => u.id), incognito: state.incognito })) return;
+  document.getElementById("typing-preview")?.classList.add("hidden");
   addUserMessage(text, uploads);
   state.uploads = []; renderAttachments();
   $("#input").value = ""; autosize();
@@ -678,8 +680,24 @@ $("#input").addEventListener("input", () => {
     const text = $("#input").value;
     if (!state.busy && text.trim().length > 2 && state.ws?.readyState === 1)
       state.ws.send(JSON.stringify({ type: "typing", text, conversation_id: state.incognito ? null : state.conversationId }));
-  }, 600);
+  }, 250);
+  const pv = document.getElementById("typing-preview");
+  if (pv && normText(pv.dataset.for) !== normText($("#input").value)) pv.classList.add("hidden");
 });
+function normText(t) { return (t || "").toLowerCase().split(/\s+/).join(" ").replace(/[\s?.!]+$/, "").trim(); }
+function showPreview(ev) {
+  // the answer, worked out while you type: press Enter and it appears instantly
+  if (state.busy || normText(ev.for) !== normText($("#input").value) || !(ev.text || "").trim()) return;
+  let pv = document.getElementById("typing-preview");
+  if (!pv) {
+    pv = el("div", { id: "typing-preview", class: "typing-preview" });
+    $("#composer").before(pv);
+  }
+  pv.dataset.for = ev.for;
+  pv.replaceChildren(el("span", { class: "tp-label", text: ev.done ? "Answer ready - press Enter" : "Thinking ahead…" }),
+                     el("div", { class: "tp-text", text: ev.text }));
+  pv.classList.remove("hidden");
+}
 $("#input").addEventListener("paste", e => {
   const files = [...(e.clipboardData?.files || [])];
   if (files.length) { e.preventDefault(); uploadFiles(files); }

@@ -526,7 +526,10 @@ class Orchestrator:
         if (quickmath.solve(t) or REMEMBER_RE.match(t) or FORGET_RE.match(t) or mentions_clicky(t)
                 or language.plan(t) or language.looks_like_command(t) or point_target(t) or SCREEN_INTENT.search(t)):
             return False
-        return not select_tools(deps, t)  # questions needing files/web/screen wait for Enter
+        # only questions that need the web, your files, pictures or memory changes wait for Enter
+        from .tools import _GROUPS, _WANT
+
+        return not any(_WANT[g].search(t) for g in ("web", "files", "image", "memory") if g in _WANT and g in _GROUPS)
 
     async def speculate(self, conversation_id: int | None, partial: str, send) -> None:
         sp = getattr(self, "_spec", None)
