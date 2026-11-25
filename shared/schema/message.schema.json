@@ -6,7 +6,7 @@
   "properties": {
     "id": {"type": "string", "description": "UUID. Responses, stream chunks and errors reuse the request's id."},
     "type": {"enum": ["request", "response", "event", "stream_chunk", "error"]},
-    "service": {"enum": ["inference", "image", "screen", "cursor", "files", "system"]},
+    "service": {"enum": ["inference", "image", "screen", "cursor", "files", "system", "skills"]},
     "action": {"type": "string", "examples": ["chat", "generate", "capture", "move", "click", "read_file", "heartbeat"]},
     "payload": {"type": "object"},
     "requires_confirmation": {"type": "boolean", "default": false},

@@ -18,6 +18,7 @@ import time
 import uuid
 
 from .extract import is_image
+from .intents import SCREENISH, parse_task, point_target
 from .llm import BackendUnavailable
 from .memory import estimate_tokens
 from .pc_link import PcError
@@ -284,7 +285,9 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.exception("recall failed")
 
-        point_note = await self._direct_point(text, send) if backend.source == "pc" else None
+        point_note = await self._direct_task(text, send) if backend.source == "pc" else None
+        if point_note is None and backend.source == "pc":
+            point_note = await self._direct_point(text, send)
         if point_note:
             memory_note = (memory_note + "\n" if memory_note else "") + point_note
         screen = None if point_note else (await self._prefetch_screen(text, send) if backend.source == "pc" else None)
@@ -314,18 +317,41 @@ class Orchestrator:
                     "ms": total_ms, "first_ms": tool_log.get("first_ms")})
         return {"answer": answer, "source": source, "model": model, "ms": total_ms}
 
+    async def _direct_task(self, text: str, send) -> str | None:
+        """'Open Notes and type today's date', 'play X in Music', 'open Safari': run it as a skill task
+        (one OK from the user, Click's cursor shows each step). Returns a note for the model, or None."""
+        deps = self.deps
+        task = parse_task(text)
+        if not (task and deps.link.connected and deps.permissions.enabled("input_actions")):
+            return None
+        await send({"type": "tool", "name": "click", "status": "running",
+                    "caption": f"{task['summary']} - waiting for your OK"})
+        try:
+            res = await deps.link.request("skills", "run", {"plan": task["plan"], "summary": task["summary"]},
+                                          timeout=240, requires_confirmation=True)
+        except PcError as exc:
+            await send({"type": "tool", "name": "click", "status": "failed", "error": str(exc)})
+            if task.get("open_only") and "Couldn't find an app" in str(exc):
+                return None  # not an app: maybe a folder or button; let pointing handle it
+            return f"(You tried to do this on the user's computer: {task['summary']}. It didn't work: {exc}. " \
+                   "Tell them plainly in one or two sentences. Don't call any tools.)"
+        await send({"type": "tool", "name": "click", "status": "done"})
+        deps.audit.log("input", "skills.run", f"{task['summary']} -> {res.get('steps')}")
+        steps = "; ".join(f"{d['step']}: {d['result']}" for d in res.get("steps", []))
+        return (f"(You just did this on the user's computer: {steps}. Tell them in one short sentence that it's "
+                "done. Don't call any tools.)")
+
     async def _direct_point(self, text: str, send) -> str | None:
         """'Show me where X is' / 'open X': find X ourselves and move Click's cursor there (and for
         'open', click it after the user's OK). Reliable and fast; doesn't depend on a small model
         choosing tools. Returns a note for the model, or None if this isn't such a request."""
         deps = self.deps
         m_open = OPEN_RE.match(text.strip())
-        m = m_open or POINT_RE.match(text.strip())
-        if not (m and deps.link.connected and deps.permissions.enabled("cursor")
+        target = m_open.group("t").strip(" ?.!'\"") if m_open else point_target(text)
+        if not (target and deps.link.connected and deps.permissions.enabled("cursor")
                 and deps.permissions.enabled("screen_reading")):
             return None
-        target = m.group("t").strip(" ?.!'\"")
-        if not target or len(target) > 60:
+        if len(target) > 60:
             return None
         await send({"type": "tool", "name": "find_ui_element", "status": "running", "caption": f"Looking for '{target}'"})
         await deps.narrate(f"Looking for '{target}'")
@@ -337,6 +363,8 @@ class Orchestrator:
         matches = found.get("matches") or []
         if not matches:
             await send({"type": "tool", "name": "find_ui_element", "status": "failed", "error": "not found"})
+            if not m_open and not SCREENISH.search(text):
+                return None  # e.g. "where is the weather today?" - a normal question, answer it normally
             hint = found.get("permission_problem") or ""
             return (f"(You looked for '{target}' on the user's screen and couldn't find it. {hint} Say so in one "
                     "sentence and say where it usually is.)")

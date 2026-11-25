@@ -152,3 +152,27 @@ def test_find_prefers_dock_app_and_never_points_at_clicks_own_chat():
     s2._find_by_text = lambda q: [(1.0, Element("system settings", "Text", Rect(1150, 120, 120, 16)))]
     res2 = s2.find_ui_element("system settings")
     assert res2["matches"][0]["name"] == "Apple" and "Apple menu" in res2["matches"][0]["note"]
+
+
+def test_desktop_icons_are_found():
+    from companion.platforms import Element, Platform, Rect
+    from companion.screen import ScreenService
+
+    class FakeMac(Platform):
+        def desktop_items(self):
+            return [Element("Budget 2026", "DesktopIcon", Rect(1300, 400, 70, 80), window_title="Desktop"),
+                    Element("Screenshots", "DesktopIcon", Rect(1300, 520, 70, 80), window_title="Desktop")]
+
+    s = ScreenService(FakeMac(), {"blocklist": []})
+    s._find_by_text = lambda q: []
+    res = s.find_ui_element("budget")
+    assert res["matches"][0]["name"] == "Budget 2026" and res["matches"][0]["where"] == "Desktop"
+
+
+def test_skill_descriptions_and_app_names():
+    from companion.skills import _as_text, app_name, describe
+
+    assert app_name("system settings") == "System Settings" and app_name("music") == "Music"
+    assert app_name("google chrome") == "Google Chrome"
+    assert describe({"skill": "play_music", "query": "Levitating"}) == "Play “Levitating” in Music"
+    assert _as_text('say "hi"') == 'say \\"hi\\"'

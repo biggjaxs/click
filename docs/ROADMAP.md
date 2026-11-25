@@ -235,3 +235,27 @@ Pi, auto-start on box detection, and wipe-on-unplug.
 - After every answer the cursor glides back to the orb and fades away.
 - The orb stays calm while thinking (a soft glow, no spinning).
 - The full chat is liquid glass: drifting light, a flowing violet/cyan edge, and an orb send button.
+
+## Built in version 1.8
+- **Skills: Click really does things,** with one OK for the whole task (the popup lists every
+  step) and the cursor moving to each spot:
+  - "open X" opens the app; the cursor goes to its Dock icon first.
+  - "open Music and play X" / "play X": finds the song in your library and plays it; otherwise
+    opens Apple Music search for it.
+  - "open Notes and type today's date and time" / "make a note saying ...": creates and shows the
+    note, with the real date and time filled in.
+  - "open TextEdit and type ..." / "type ...": types into the app.
+  - First use: macOS asks "Click wants to control Notes/Music". Click OK (Privacy & Security >
+    Automation).
+- **"Where is X" works for the whole screen:**
+  - desktop icons (Finder's desktop), up to 14 open windows, the Dock, the menu bar, then OCR
+  - understands many phrasings and ignores "on my home screen/desktop/dock"
+  - if the normal screenshot comes back blank (newer macOS), uses macOS's screencapture tool
+  - general questions like "where is the weather" are answered normally
+- **The full chat is a 3D liquid-glass capsule:** a thick rim lit from above, an outer glow, a
+  glossy highlight and flowing colour.
+
+### Next for skills
+- More skills: Messages, Mail draft, Calendar events, Safari search, set volume/brightness, timers.
+- Windows versions of the skills.
+- Let a bigger model chain skills on its own (Apple Silicon / built-in engine).

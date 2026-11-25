@@ -77,6 +77,10 @@ class Platform:
     def element_at(self, x: float, y: float) -> Element | None:
         return None
 
+    def desktop_items(self) -> list[Element]:
+        """Icons on the desktop (files, folders, drives)."""
+        return []
+
     def dock_items(self) -> list[Element]:
         """App icons in the Dock / taskbar."""
         return []

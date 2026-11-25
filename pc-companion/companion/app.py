@@ -51,6 +51,9 @@ class App:
         self.inference = Inference(self.settings, self.models)
         self.imagegen = ImageGenerator(self.models, self.settings)
         self.actions = Actions(self.bridge, self.ghost, self.screen, self.platform, self.settings)
+        from .skills import Skills
+
+        self.skills = Skills(self)
         self.server = CompanionServer(self)
         self._popups = []
 
@@ -656,6 +659,12 @@ class App:
 
     async def action_scroll(self, p):
         return await self.actions.scroll(p)
+
+    async def skills_run(self, p):
+        try:
+            return await self.skills.run(p)
+        finally:
+            self.bridge.ghostRest.emit()
 
     async def inference_describe(self, p):
         return await self.inference.describe(p)

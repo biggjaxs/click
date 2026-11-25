@@ -119,6 +119,31 @@ class MacPlatform(Platform):
                                window_title=window.title))
         return out
 
+    def desktop_items(self) -> list[Element]:
+        """Icons on the desktop. They belong to Finder's desktop, not to any window."""
+        finder = [a for a in NSWorkspace.sharedWorkspace().runningApplications()
+                  if (a.bundleIdentifier() or "") == "com.apple.finder"]
+        if not finder:
+            return []
+        app = AXUIElementCreateApplication(finder[0].processIdentifier())
+        out: list[Element] = []
+        for area in _attr(app, "AXChildren") or []:
+            if (_attr(area, "AXRole") or "") != "AXScrollArea":
+                continue  # Finder windows are AXWindow; the desktop is a scroll area
+            stack = [(area, 0)]
+            while stack and len(out) < 500:
+                el, depth = stack.pop()
+                for c in _attr(el, "AXChildren") or []:
+                    if depth < 5:
+                        stack.append((c, depth + 1))
+                if el is area:
+                    continue
+                title = _attr(el, "AXTitle") or _attr(el, "AXDescription") or _attr(el, "AXFilename") or ""
+                rect = _rect_of(el)
+                if title and rect and rect.w > 4 and rect.h > 4:
+                    out.append(Element(name=str(title)[:120], role="DesktopIcon", rect=rect, window_title="Desktop"))
+        return out
+
     def dock_items(self) -> list[Element]:
         """App icons in the Dock, so "show me System Settings" can point at its icon."""
         dock = [a for a in NSWorkspace.sharedWorkspace().runningApplications()

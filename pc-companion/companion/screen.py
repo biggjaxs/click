@@ -58,7 +58,10 @@ def _grab(rect: Rect) -> Image.Image:
 
         with mss.mss() as sct:
             shot = sct.grab({"left": rect.x, "top": rect.y, "width": rect.w, "height": rect.h})
-            return Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+        if sys.platform == "darwin" and img.getbbox() is None:
+            raise ScreenError("blank screenshot")  # newer macOS can return an empty image; use screencapture
+        return img
     except Exception as exc:  # noqa: BLE001
         if sys.platform == "darwin":  # fallback: macOS built-in screencapture tool
             with tempfile.TemporaryDirectory() as tmp:
@@ -278,13 +281,14 @@ class ScreenService:
             if score >= 0.6:
                 scored.append((min(1.0, score + boost), el))
 
-        for getter, boost in ((self.platform.dock_items, 0.04), (self.platform.menu_bar_items, 0.02)):
+        for getter, boost in ((self.platform.dock_items, 0.04), (self.platform.menu_bar_items, 0.02),
+                              (self.platform.desktop_items, 0.03)):
             try:
                 for el in getter():
                     add(el, boost)
             except Exception:  # noqa: BLE001
                 pass
-        wins = [self._find_window(window)] if window else self.platform.list_windows()[:6]
+        wins = [self._find_window(window)] if window else self.platform.list_windows()[:14]
         for i, win in enumerate(wins):
             if self._blocked(win):
                 continue

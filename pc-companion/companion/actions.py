@@ -215,7 +215,7 @@ class Actions:
             self.bridge.indicator.emit("control", False)
         return {"status": "clicked", "at": [int(x), int(y)], "element": name}
 
-    async def type_text(self, a: dict) -> dict:
+    async def type_text(self, a: dict, confirmed: bool = False) -> dict:
         text = str(a.get("text", ""))
         if not text:
             raise ActionError("Nothing to type.")
@@ -228,7 +228,8 @@ class Actions:
             raise ActionError("The active window is blocklisted, so Click won't type there.")
         preview = text if len(text) <= 160 else text[:157] + "…"
         x, y = (self.ghost.x, self.ghost.y) if self.ghost.visible else (aw.rect.center if aw else (100, 100))
-        await self._confirm("type", "Type text", preview, x, y, a)
+        if not confirmed:  # a skill task was already approved as a whole
+            await self._confirm("type", "Type text", preview, x, y, a)
         if await asyncio.to_thread(self.platform.focused_is_sensitive):
             raise ActionError("The focus moved to a password field, so Click stopped.")
         start = self._guard_start()

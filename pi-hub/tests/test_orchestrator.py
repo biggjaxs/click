@@ -265,27 +265,58 @@ def test_show_me_where_moves_the_cursor_without_relying_on_the_model(services):
     assert out["answer"] == "That's your Wi-Fi menu."
 
 
-def test_open_app_points_then_clicks_after_ok(services):
-    services.link.connected = True
-    services.link.capabilities = {"cpu_only": True}
+def _wire(services, responses):
     calls = []
 
     async def fake_request(service, action, payload, **kw):
         calls.append((service, action, payload))
-        if action == "find_ui_element":
-            return {"matches": [{"id": "e3", "name": "System Settings", "role": "DockItem", "where": "Dock"}]}
-        return {"status": "clicked"}
+        return responses.get((service, action), {"status": "ok"})
 
     async def fake_event(*a, **k):
         calls.append(("event",) + a)
 
+    services.link.connected = True
+    services.link.capabilities = {"cpu_only": True}
     services.link.request = fake_request
     services.link.send_event = fake_event
-    services.pc_backend = FakeBackend([[{"type": "token", "text": "Opened System Settings."}]])
+    return calls
+
+
+def test_open_app_runs_as_one_approved_task(services):
+    calls = _wire(services, {("skills", "run"): {"status": "done", "steps": [{"step": "Open System Settings", "result": "opened"}]}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Opened."}]])
     run(services.orchestrator.handle(send=Recorder(), text="open system settings", conversation_id=None,
                                      upload_ids=[], incognito_key=None, state=_state()))
-    kinds = [c[:2] for c in calls]
-    assert ("screen", "find_ui_element") in kinds and ("cursor", "move") in kinds and ("cursor", "click") in kinds
-    move = next(c for c in calls if c[:2] == ("cursor", "move"))
-    assert "Dock" in move[2]["label"]
+    task = next(c for c in calls if c[:2] == ("skills", "run"))
+    assert task[2]["plan"] == [{"skill": "open_app", "app": "system settings"}]
     assert ("event", "cursor", "rest", {}) in calls  # the cursor goes home after the answer
+
+
+def test_notes_and_music_tasks(services):
+    calls = _wire(services, {("skills", "run"): {"status": "done", "steps": []}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Done."}], [{"type": "token", "text": "Done."}]])
+    for text in ("open notes and type today's date and time", "open music and play Levitating by Dua Lipa"):
+        run(services.orchestrator.handle(send=Recorder(), text=text, conversation_id=None, upload_ids=[],
+                                         incognito_key=None, state=_state()))
+    plans = [c[2]["plan"] for c in calls if c[:2] == ("skills", "run")]
+    assert plans[0][0] == {"skill": "open_app", "app": "Notes"} and plans[0][1]["skill"] == "new_note"
+    assert any(ch.isdigit() for ch in plans[0][1]["text"])  # the real date/time, not the words
+    assert plans[1] == [{"skill": "open_app", "app": "Music"}, {"skill": "play_music", "query": "Levitating"}]
+
+
+def test_where_is_x_on_my_home_screen_points(services):
+    calls = _wire(services, {("screen", "find_ui_element"): {"matches": [{"id": "e9", "name": "Budget", "where": "Desktop"}]}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "There it is."}]])
+    run(services.orchestrator.handle(send=Recorder(), text="where is my budget folder on my home screen?",
+                                     conversation_id=None, upload_ids=[], incognito_key=None, state=_state()))
+    assert ("screen", "find_ui_element", {"query": "budget"}) in calls
+    assert any(c[:2] == ("cursor", "move") and c[2]["element_id"] == "e9" for c in calls)
+
+
+def test_general_where_question_is_answered_normally(services):
+    calls = _wire(services, {("screen", "find_ui_element"): {"matches": []}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Check a weather site."}]])
+    run(services.orchestrator.handle(send=Recorder(), text="where is the weather today?", conversation_id=None,
+                                     upload_ids=[], incognito_key=None, state=_state()))
+    first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
+    assert "couldn't find" not in first["messages"][-1]["content"]

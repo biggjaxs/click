@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizeGrip, QStackedLayout, QVBoxLayout, QWidget,
 )
 
-TILE_W, TILE_H, MARGIN = 400, 600, 14
+TILE_W, TILE_H, MARGIN = 420, 620, 4
+GLOW = 12      # space around the glass for its glow
 
 
 def _dark() -> bool:
@@ -272,10 +273,10 @@ class Tile(QWidget):
         self._glow.timeout.connect(self._tick_glow)
         self._glow.start(80)  # slow, gentle motion; light on the processor
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(GLOW, GLOW, GLOW, GLOW)
         outer.addWidget(self.frame)
         lay = QVBoxLayout(self.frame)
-        lay.setContentsMargins(1, 1, 1, 1)
+        lay.setContentsMargins(9, 9, 9, 9)  # keep the content inside the thick glass rim
         lay.setSpacing(0)
         self.header = Header(self)
         lay.addWidget(self.header)
@@ -324,40 +325,82 @@ class Tile(QWidget):
             self.update()
 
     def paintEvent(self, _):
+        """A 3D liquid-glass capsule, like the orb stretched into a window:
+        soft outer glow, a thick rim lit from above, a glossy highlight, slowly flowing colour."""
         import math
 
-        from PySide6.QtGui import QConicalGradient, QRadialGradient
+        from PySide6.QtGui import QConicalGradient, QLinearGradient, QRadialGradient
 
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        path = QPainterPath()
-        path.addRoundedRect(r, 24, 24)
-        p.fillPath(path, QColor(13, 13, 18, 238))
         t = self._glow_t
         accent = QColor(self.accent)
-        # two soft blobs of light drifting slowly inside the glass, like the orb's liquid
-        for cx, cy, rad, col, ph in ((0.25, 0.12, 0.75, accent, 0.0), (0.85, 0.95, 0.65, QColor("#22d3ee"), 2.1)):
-            c = QPointF(r.width() * (cx + 0.06 * math.sin(t * 0.5 + ph)), r.height() * (cy + 0.04 * math.cos(t * 0.4 + ph)))
-            g = QRadialGradient(c, r.width() * rad)
+        cyan = QColor("#22d3ee")
+        m = GLOW  # room for the outer glow
+        body = QRectF(self.rect()).adjusted(m, m, -m, -m)
+        radius = 28.0
+
+        def rounded(r: QRectF, rad: float) -> QPainterPath:
+            pth = QPainterPath()
+            pth.addRoundedRect(r, rad, rad)
+            return pth
+
+        # 1. outer glow, like the orb's halo
+        for i in range(m, 0, -2):
+            g = QColor(accent)
+            g.setAlpha(int(5 + 2.2 * (m - i)))
+            p.setPen(QPen(g, 2))
+            p.setBrush(Qt.NoBrush)
+            p.drawPath(rounded(body.adjusted(-i, -i, i, i), radius + i))
+        # 2. the glass body with drifting liquid light inside
+        shape = rounded(body, radius)
+        p.fillPath(shape, QColor(12, 12, 17, 240))
+        p.save()
+        p.setClipPath(shape)
+        for cx, cy, rad, col, ph in ((0.2, 0.08, 0.8, accent, 0.0), (0.9, 0.98, 0.7, cyan, 2.1)):
+            c = QPointF(body.x() + body.width() * (cx + 0.06 * math.sin(t * 0.5 + ph)),
+                        body.y() + body.height() * (cy + 0.04 * math.cos(t * 0.4 + ph)))
+            g = QRadialGradient(c, body.width() * rad)
             col = QColor(col)
-            col.setAlpha(46)
+            col.setAlpha(52)
             g.setColorAt(0, col)
             g.setColorAt(1, QColor(0, 0, 0, 0))
-            p.save()
-            p.setClipPath(path)
-            p.fillRect(r, g)
-            p.restore()
-        # a glowing edge whose colours slowly flow around the window
-        edge = QConicalGradient(r.center(), (t * 12) % 360)
-        a1, a2 = QColor(accent), QColor("#22d3ee")
-        a1.setAlpha(170)
-        a2.setAlpha(150)
-        edge.setColorAt(0.0, a1)
-        edge.setColorAt(0.5, a2)
-        edge.setColorAt(1.0, a1)
-        p.setPen(QPen(edge, 1.6))
-        p.drawPath(path)
+            p.fillRect(body, g)
+        p.restore()
+        # 3. thick rim: colour flowing around it, lit from the top, shaded at the bottom (3D)
+        rim_w = 7.0
+        rim = body.adjusted(rim_w / 2, rim_w / 2, -rim_w / 2, -rim_w / 2)
+        flow = QConicalGradient(body.center(), (t * 10) % 360)
+        c1, c2 = QColor(accent), QColor(cyan)
+        c1.setAlpha(235)
+        c2.setAlpha(215)
+        flow.setColorAt(0.0, c1)
+        flow.setColorAt(0.5, c2)
+        flow.setColorAt(1.0, c1)
+        p.setPen(QPen(flow, rim_w))
+        p.setBrush(Qt.NoBrush)
+        p.drawPath(rounded(rim, radius - rim_w / 2))
+        light = QLinearGradient(body.topLeft(), body.bottomLeft())
+        light.setColorAt(0.0, QColor(255, 255, 255, 120))
+        light.setColorAt(0.18, QColor(255, 255, 255, 25))
+        light.setColorAt(0.75, QColor(0, 0, 0, 0))
+        light.setColorAt(1.0, QColor(0, 0, 0, 120))
+        p.setPen(QPen(light, rim_w))
+        p.drawPath(rounded(rim, radius - rim_w / 2))
+        # inner edge: a thin bright line, then a soft inner shadow, so the rim looks rounded
+        p.setPen(QPen(QColor(255, 255, 255, 60), 1.0))
+        p.drawPath(rounded(body.adjusted(rim_w, rim_w, -rim_w, -rim_w), radius - rim_w))
+        p.setPen(QPen(QColor(0, 0, 0, 90), 2.0))
+        p.drawPath(rounded(body.adjusted(rim_w + 1.5, rim_w + 1.5, -rim_w - 1.5, -rim_w - 1.5), radius - rim_w - 1.5))
+        # 4. glossy highlight along the top-left, like light on the orb
+        gloss = QRadialGradient(QPointF(body.x() + body.width() * 0.28, body.y() + 6), body.width() * 0.45)
+        gloss.setColorAt(0.0, QColor(255, 255, 255, 150))
+        gloss.setColorAt(1.0, QColor(255, 255, 255, 0))
+        p.save()
+        ring = rounded(body, radius).subtracted(rounded(body.adjusted(rim_w, rim_w, -rim_w, -rim_w), radius - rim_w))
+        p.setClipPath(ring)
+        p.fillRect(QRectF(body.x(), body.y(), body.width(), 40), gloss)
+        p.restore()
         p.end()
 
     # ---- window behaviour ------------------------------------------------------------------------------

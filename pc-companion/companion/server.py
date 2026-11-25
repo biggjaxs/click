@@ -71,6 +71,7 @@ ROUTES = {
     ("cursor", "press_keys"): ("actions", "action_keys", False),
     ("cursor", "scroll"): ("actions", "action_scroll", False),
     ("inference", "describe"): (None, "inference_describe", False),
+    ("skills", "run"): ("actions", "skills_run", False),
 }
 
 

@@ -16,7 +16,7 @@ HEARTBEAT_TIMEOUT_SECONDS = 15
 MAX_MESSAGE_BYTES = 32 * 1024 * 1024  # screenshots and generated images travel base64-encoded
 
 MESSAGE_TYPES = {"request", "response", "event", "stream_chunk", "error"}
-SERVICES = {"inference", "image", "screen", "cursor", "files", "system"}
+SERVICES = {"inference", "image", "screen", "cursor", "files", "system", "skills"}
 
 
 class ProtocolError(ValueError):
