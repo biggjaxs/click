@@ -375,9 +375,10 @@ class Tile(QWidget):
             return
         self._tries += 1
         self.stack.setCurrentWidget(self.setup)
-        if self._tries in (8, 40):  # say plainly what's wrong, but keep trying
+        if self._tries in (8, 20, 40):  # say plainly what's wrong, but keep trying
             self.setup.title.setText("The full chat window can't load yet")
-            self.setup.sub.setText(_diagnose(self.url) + "\n\nYou can still chat: click the orb in the top-right "
+            err = getattr(getattr(self, "hub", None), "last_error", "")
+            self.setup.sub.setText(_diagnose(self.url) + (f"\n\nError: {err}" if err else "") + "\n\nYou can still chat: click the orb in the top-right "
                                    "to open Ask Click. Details: ~/Library/Application Support/ClickCompanion/companion.log")
         QTimer.singleShot(1500, self._load)
 

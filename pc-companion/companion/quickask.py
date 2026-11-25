@@ -199,7 +199,9 @@ class QuickAsk(QWidget):
         kind = ev.get("type")
         if kind == "link":
             if not self.busy:
-                self.status.setText("Ready" if ev["ok"] else "Connecting to Click…")
+                err = getattr(self, "hub_error", lambda: "")()
+                self.status.setText("Ready" if ev["ok"] else (f"Problem: {err[:120]}" if err else "Connecting to Click…"))
+                self.status.setWordWrap(True)
         elif kind == "conversation":
             self.conversation_id = ev.get("id")
         elif kind == "token":

@@ -18,7 +18,32 @@ import httpx
 
 log = logging.getLogger("click.standalone")
 
-PORT = 47390
+PORT = 47390          # first choice; if something else uses it, the next free port is used
+
+
+class _LastError(logging.Handler):
+    """Remembers the most recent error from the chat part, so Click can show it on screen."""
+
+    def __init__(self):
+        super().__init__(logging.ERROR)
+        self.text = ""
+
+    def emit(self, record):
+        msg = record.getMessage()
+        if record.exc_info and record.exc_info[1] is not None:
+            msg += f" ({record.exc_info[0].__name__}: {record.exc_info[1]})"
+        self.text = msg[:400]
+
+
+def _port_free(port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
 
 
 def hub_dir() -> Path:
@@ -49,10 +74,18 @@ class EmbeddedHub:
         self.data_dir = settings.dir / "Hub"
         self.server = None
         self.thread: threading.Thread | None = None
+        self.port = PORT
+        self.failures = 0
+        self.errors = _LastError()
+        logging.getLogger().addHandler(self.errors)
 
     @property
     def url(self) -> str:
-        return f"http://127.0.0.1:{PORT}"
+        return f"http://127.0.0.1:{self.port}"
+
+    @property
+    def last_error(self) -> str:
+        return self.errors.text
 
     def start(self) -> None:
         hub = hub_dir()
@@ -80,8 +113,11 @@ class EmbeddedHub:
     def _serve(self) -> None:
         import uvicorn
 
+        if not _port_free(self.port):  # e.g. a leftover Click still holding it: use the next free port
+            self.port = next((p for p in range(PORT, PORT + 40) if _port_free(p)), PORT)
+            log.warning("Chat part using port %s", self.port)
         # log_config=None: hub errors go to Click's own log file instead of a hidden console
-        config = uvicorn.Config(self._app, host="127.0.0.1", port=PORT, log_level="info", log_config=None,
+        config = uvicorn.Config(self._app, host="127.0.0.1", port=self.port, log_level="info", log_config=None,
                                 proxy_headers=False)
         self.server = uvicorn.Server(config)
 
@@ -103,7 +139,23 @@ class EmbeddedHub:
         return bool(self.thread and self.thread.is_alive())
 
     def restart(self) -> None:
-        log.warning("Restarting Click's chat part")
+        """Start the chat part again. After two failed starts, its data from an earlier version is
+        moved aside (kept, not deleted) and it starts fresh, so Click always comes back."""
+        self.failures += 1
+        log.warning("Restarting Click's chat part (attempt %s): %s", self.failures, self.last_error)
+        if self.failures == 2 and self.data_dir.exists():
+            aside = self.data_dir.with_name(f"Hub-old-{int(time.time())}")
+            self.data_dir.rename(aside)
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            log.warning("Moved earlier chat data to %s and starting fresh", aside)
+            self.settings.set("standalone_paired", False)
+            import sys as _sys
+
+            for name in [m for m in _sys.modules if m == "app" or m.startswith("app.")]:
+                del _sys.modules[name]  # reload the chat part cleanly
+            from app.main import app
+
+            self._app = app
         self._serve()
 
     def ensure_paired(self, pc_cert: str, pc_id: str, pc_name: str, port: int) -> str | None:
@@ -119,7 +171,7 @@ class EmbeddedHub:
             self.settings.set("standalone_paired", True)
             return r.json()["pi_cert_pem"]
         except Exception as exc:  # noqa: BLE001
-            log.error("Automatic pairing failed: %s", exc)
+            log.warning("Automatic pairing failed: %s", exc)
             return None
 
     def stop(self) -> None:

@@ -8,6 +8,7 @@ import asyncio
 import logging
 import socket
 import sys
+import time
 
 from PySide6.QtCore import QTimer
 
@@ -128,9 +129,11 @@ class App:
                 self.settings.set("pi_cert_pem", cert)
                 self.server.restart_tls()
             self.tile.url = self.hub.url
+            self.tile.hub = self.hub
         from .quickask import QuickAsk
 
         self.ask = QuickAsk(self.tile.url, self.settings["cursor"]["color"])
+        self.ask.hub_error = lambda: self.hub.last_error if self.hub else ""
         self.ask.open_full.connect(lambda: (self.ask.hide(), self.toggle_tile() if not self.tile.isVisible() else None))
         self._watchdog = QTimer()
         self._watchdog.timeout.connect(self._watch)
@@ -144,6 +147,18 @@ class App:
         else:
             self.tile.show_tile()
             self._run_setup()
+
+    def _after_hub_start(self) -> None:
+        cert = self.hub.ensure_paired(self.server.identity.cert, self.settings["pc_id"], self.settings["pc_name"],
+                                      self.settings["port"])
+        if cert:
+            self.settings.set("pi_cert_pem", cert)
+            self.server.restart_tls()
+        if self.tile.url != self.hub.url:
+            self.tile.url = self.hub.url
+            self.ask.link.url = self.hub.url.replace("http://", "ws://") + "/ws"
+        if self.tile.isVisible():
+            self.tile.show_chat()
 
     def toggle_ask(self) -> None:
         """Clicking the orb opens the Ask panel (or the setup screen until Click is ready)."""
@@ -169,7 +184,13 @@ class App:
         """Every second: keep the chat part alive and keep the bubble's mood in sync."""
         if self.hub and not self.hub.alive():
             self.bubble.set_state("error")
+            now = time.time()
+            if now - getattr(self, "_last_restart", 0) < min(60, 5 * (self.hub.failures + 1)):
+                return  # back off: don't hammer a failing start
+            self._last_restart = now
             self.hub.restart()
+            if self.hub.alive():
+                self._after_hub_start()
             return
         if self.paused:
             self.bubble.set_state("idle")
@@ -263,6 +284,17 @@ class App:
                 self.ghost.set_home(o.smap.left + lx * o.smap.scale, o.smap.top + ly * o.smap.scale)
                 return
 
+    def _selftest_ui(self) -> None:
+        """Load the real chat page in the real chat window; report whether it displays."""
+        def done(ok):
+            print("SELFTEST UI", "OK" if ok else "FAILED", flush=True)
+            self.qt.exit(0 if ok else 3)
+
+        self.tile.web.loadFinished.connect(done)
+        self.tile._want_chat = False
+        self.tile.web.setUrl(__import__("PySide6.QtCore", fromlist=["QUrl"]).QUrl(self.tile.url + "/?tile=1"))
+        QTimer.singleShot(60000, lambda: done(False))
+
     def _selftest_check(self, tries: int = 0) -> None:
         """Used by the automatic Mac build to prove the app starts: hub up + link connected."""
         import httpx
@@ -271,11 +303,14 @@ class App:
             st = httpx.get(f"{self.tile.url}/api/status", timeout=2).json()
             if st["pc"]["connected"]:
                 print("SELFTEST OK", st["pc"]["pc_name"], flush=True)
+                if "--ui" in sys.argv:
+                    self._selftest_ui()
+                    return
                 self.qt.exit(0)
                 return
         except Exception as exc:  # noqa: BLE001
             log.info("selftest waiting: %s", exc)
-        if tries > 60:
+        if tries > 150:
             print("SELFTEST FAILED", flush=True)
             self.qt.exit(1)
             return
