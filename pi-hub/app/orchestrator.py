@@ -390,12 +390,15 @@ class Orchestrator:
         if not task:
             return None
         written = []
+        streamed = False
         for step in task["plan"]:
             if step.get("compose"):
                 what = step.pop("compose")
                 await send({"type": "tool", "name": "click", "status": "running", "caption": f"Writing {what[:60]}…"})
                 await deps.narrate(f"Writing {what[:60]}")
-                step["text"] = await self._compose(what)
+                await send({"type": "token", "text": ("\n\n" if streamed else "") + f"*Writing {what}:*\n\n"})
+                step["text"] = await self._compose(what, send)  # you watch it being written
+                streamed = True
                 written.append(step["text"])
         await send({"type": "tool", "name": "click", "status": "running", "caption": f"{task['summary']}"})
         try:
@@ -415,8 +418,11 @@ class Orchestrator:
             msg += " That song isn't in your library, so I opened Apple Music search for it."
         if any(st["skill"] == "email_draft" for st in task["plan"]):
             msg += " It's open in Mail: check it and press Send when you're happy (I never send email myself)."
-        if written:
-            msg += "\n\nHere's what I wrote:\n\n" + "\n\n".join(written)
+        if streamed:  # the writing was already shown as it happened: just add the result
+            await send({"type": "token", "text": "\n\n" + msg})
+            r = Reply("\n\n".join(written) + "\n\n" + msg)
+            r.streamed = True
+            return r
         return Reply(msg)
 
     async def _guide(self, text: str, send) -> "Reply | None":
@@ -454,7 +460,7 @@ class Orchestrator:
         r.streamed = True
         return r
 
-    async def _compose(self, what: str) -> str:
+    async def _compose(self, what: str, send=None) -> str:
         """Have the AI write something for a note or to type ("a paragraph on why global warming is bad")."""
         msgs = [{"role": "system", "content": "You write text that will be put straight into the user's document. "
                  "Output only the text itself: no title, no intro like 'Sure', no quotes, no markdown."},
@@ -464,6 +470,8 @@ class Orchestrator:
             async for ev in self.deps.pc_backend.chat_stream(msgs, None, options={"num_predict": 450, "temperature": 0.7}):
                 if ev["type"] == "token":
                     out.append(ev["text"])
+                    if send:
+                        await send({"type": "token", "text": ev["text"]})
         except (PcError, BackendUnavailable) as exc:
             raise PcError(f"the AI couldn't write it: {exc}") from exc
         text = "".join(out).strip().strip('"').strip()
