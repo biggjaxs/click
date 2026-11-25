@@ -152,8 +152,13 @@ class QuickAsk(QWidget):
 
     # ---- look: dark glass card with a soft accent glow ---------------------------------------------------
     def _tick_goo(self):
+        from .tile import reduce_motion
+
         if self.isVisible():
-            self._goo_t += 0.08
+            if not reduce_motion():
+                self._goo_t += 0.08
+            else:
+                self._goo_t += 0.02  # still animate the "thinking" dots slowly
             self.update()
             if self.busy and not self.answer:  # "Clicky is thinking..." until the first word arrives
                 n = int(self._goo_t * 2.5) % 4

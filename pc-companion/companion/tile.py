@@ -306,6 +306,26 @@ def goo_path(panel: QRectF, panel_r: float, t: float, n: int = 140, off: float =
     return path
 
 
+_rm = {"at": 0.0, "on": False}
+
+
+def reduce_motion() -> bool:
+    """The Mac's Accessibility > Display > Reduce motion setting: when on, the goo holds still."""
+    import time
+
+    if time.time() - _rm["at"] > 30:
+        _rm["at"] = time.time()
+        try:
+            from AppKit import NSWorkspace
+
+            ws = NSWorkspace.sharedWorkspace()
+            _rm["on"] = bool(ws.respondsToSelector_("accessibilityDisplayShouldReduceMotion")
+                             and ws.accessibilityDisplayShouldReduceMotion())
+        except Exception:  # noqa: BLE001 - not a Mac
+            _rm["on"] = False
+    return _rm["on"]
+
+
 def paint_goo(p: QPainter, area: QRectF, margin: float, panel_r: float, t: float, accent_hex: str,
               off: float = GOO_OFF, amp: float = GOO_AMP, droplets: bool = True) -> None:
     """A floating ball of goo: a flat, calm panel inside (easy to read), wrapped in slowly flowing
@@ -434,7 +454,7 @@ class Tile(QWidget):
 
     # ---- liquid glass look ------------------------------------------------------------------------------
     def _tick_glow(self):
-        if self.isVisible():
+        if self.isVisible() and not reduce_motion():
             self._glow_t += 0.08
             self.update()
 

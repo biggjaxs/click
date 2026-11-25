@@ -48,6 +48,50 @@ SETTINGS_URLS = {
 }
 
 
+def installed_apps() -> dict[str, str]:
+    """Every app on this Mac: lower-case name -> path (Applications folders, System apps, Utilities)."""
+    from pathlib import Path
+
+    out: dict[str, str] = {}
+    for base in ("/Applications", "/System/Applications", "/System/Applications/Utilities",
+                 "/Applications/Utilities", str(Path.home() / "Applications")):
+        try:
+            for p in Path(base).glob("*.app"):
+                out.setdefault(p.stem.lower(), str(p))
+        except OSError:
+            continue
+    return out
+
+
+def best_app(name: str, apps: dict[str, str]) -> str | None:
+    """Fuzzy match like Spotlight/Raycast: 'spotfy' -> Spotify, 'msg' -> Messages, 'chrome' -> Google Chrome."""
+    import difflib
+
+    n = name.lower().strip()
+    n = n.removesuffix(" app").removesuffix(" application").removeprefix("the ").strip()
+    if not n:
+        return None
+    if n in apps:
+        return apps[n]
+    starts = [a for a in apps if a.startswith(n)]
+    if starts:
+        return apps[min(starts, key=len)]
+    words = [a for a in apps if n in a.split() or a.endswith(" " + n)]
+    if words:
+        return apps[min(words, key=len)]
+
+    def subseq(q, a):
+        it = iter(a)
+        return all(ch in it for ch in q)
+
+    if len(n) >= 3:
+        sub = [a for a in apps if a[0] == n[0] and subseq(n, a)]
+        if sub:
+            return apps[min(sub, key=len)]
+    close = difflib.get_close_matches(n, list(apps), n=1, cutoff=0.72)
+    return apps[close[0]] if close else None
+
+
 class SkillError(RuntimeError):
     pass
 
@@ -136,7 +180,11 @@ class Skills:
         if sys.platform == "darwin":
             r = await asyncio.to_thread(subprocess.run, ["open", "-a", name], capture_output=True, text=True)
             if r.returncode != 0:
-                raise SkillError(f"Couldn't find an app called {name} on this Mac.")
+                path = best_app(step["app"], await asyncio.to_thread(installed_apps))  # a near-miss name
+                if not path:
+                    raise SkillError(f"Couldn't find an app called {name} on this Mac.")
+                await asyncio.to_thread(subprocess.run, ["open", path], capture_output=True)
+                name = path.rsplit("/", 1)[-1].removesuffix(".app")
         elif sys.platform == "win32":
             await asyncio.to_thread(subprocess.run, ["cmd", "/c", "start", "", name], capture_output=True)
         else:

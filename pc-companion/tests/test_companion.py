@@ -224,3 +224,16 @@ def test_find_uses_mac_map_without_permissions(monkeypatch):
     monkeypatch.setattr(svc, "_find_by_text", lambda q: [])
     out = svc.find_ui_element("trash")
     assert out["matches"] and out["found_by"] == "mac map"
+
+
+def test_fuzzy_app_names_like_spotlight():
+    from companion.skills import best_app
+
+    apps = {n.lower(): f"/Applications/{n}.app" for n in
+            ("Messages", "Spotify", "Google Chrome", "System Settings", "Notes", "Numbers", "Safari", "Music")}
+    assert best_app("spotfy", apps).endswith("Spotify.app")
+    assert best_app("msg", apps).endswith("Messages.app")
+    assert best_app("chrome", apps).endswith("Google Chrome.app")
+    assert best_app("the spotify app", apps).endswith("Spotify.app")
+    assert best_app("settings", apps).endswith("System Settings.app")
+    assert best_app("zzzz", apps) is None
