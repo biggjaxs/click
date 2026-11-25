@@ -129,6 +129,14 @@ def describe(step: dict) -> str:
         return f"Type “{step['text'][:60]}”"
     if k == "open_settings":
         return f"Open {step['pane']} in System Settings"
+    if k == "quit_app":
+        return f"Close {app_name(step['app'])}"
+    if k == "music_control":
+        return {"pause": "Pause the music", "play": "Play music", "next": "Next song",
+                "previous": "Previous song"}.get(step.get("action"), "Control the music")
+    if k == "open_url":
+        u = step.get("url", "")
+        return "Search Google" if "google.com/search" in u else f"Open {u.split('//')[-1].split('/')[0]}"
     return k or "?"
 
 
@@ -138,10 +146,11 @@ class Skills:
 
     async def run(self, payload: dict) -> dict:
         plan = payload.get("plan") or []
-        if not plan or len(plan) > 6:
+        if not plan or len(plan) > 8:
             raise SkillError("Nothing to do.")
         for step in plan:
-            if step.get("skill") not in ("open_app", "play_music", "new_note", "type_text", "open_settings"):
+            if step.get("skill") not in ("open_app", "play_music", "new_note", "type_text", "open_settings",
+                                         "quit_app", "music_control", "open_url"):
                 raise SkillError(f"Unknown step {step.get('skill')}")
         summary = payload.get("summary") or " then ".join(describe(s) for s in plan)
         # one confirmation for the whole task, next to the orb
@@ -208,6 +217,43 @@ class Skills:
         self.app.bridge.narrate.emit(f"Here's {pane} in System Settings")
         return f"opened {pane} settings"
 
+    async def quit_app(self, step: dict) -> str:
+        name = app_name(step["app"])
+        if sys.platform != "darwin":
+            raise SkillError("Closing apps is Mac-only for now.")
+        await self._point(name, f"Closing {name}")
+        r = await asyncio.to_thread(subprocess.run, ["osascript", "-e", f'tell application "{_as_text(name)}" to quit'],
+                                    capture_output=True, text=True, timeout=20)
+        if r.returncode != 0:
+            path = best_app(step["app"], await asyncio.to_thread(installed_apps))
+            if not path:
+                raise SkillError(f"Couldn't find an app called {name}.")
+            name = path.rsplit("/", 1)[-1].removesuffix(".app")
+            await asyncio.to_thread(subprocess.run, ["osascript", "-e", f'tell application "{_as_text(name)}" to quit'],
+                                    capture_output=True, text=True, timeout=20)
+        return f"closed {name}"
+
+    async def music_control(self, step: dict) -> str:
+        if sys.platform != "darwin":
+            raise SkillError("Music controls are Mac-only for now.")
+        cmd = {"pause": "pause", "play": "play", "next": "next track", "previous": "previous track"}.get(step.get("action"))
+        if not cmd:
+            raise SkillError("Unknown music control.")
+        await asyncio.to_thread(_osascript, f'tell application "Music" to {cmd}')
+        self.app.bridge.narrate.emit(describe(step))
+        return describe(step).lower()
+
+    async def open_url(self, step: dict) -> str:
+        url = step.get("url", "")
+        if not url.startswith(("http://", "https://")):
+            raise SkillError("That doesn't look like a web address.")
+        w = self.app.ghost.primary_center()
+        self.app.bridge.ghostMove.emit(float(w[0]), float(w[1]), describe(step))
+        opener = ["open", url] if sys.platform == "darwin" else ["cmd", "/c", "start", "", url]
+        await asyncio.to_thread(subprocess.run, opener, capture_output=True)
+        await asyncio.sleep(1.0)
+        return describe(step).lower()
+
     async def play_music(self, step: dict) -> str:
         if sys.platform != "darwin":
             raise SkillError("Playing music is Mac-only for now.")
@@ -235,9 +281,12 @@ class Skills:
     async def new_note(self, step: dict) -> str:
         if sys.platform != "darwin":
             raise SkillError("Notes is Mac-only.")
-        text = step["text"]
+        text = step.get("text") or ""
         await self._point("Notes", "Writing your note", fallback_center=True)
-        body = _as_text(text).replace("\n", "<br>")
+        import html
+
+        paras = [p.strip() for p in text.split("\n") if p.strip()] or [""]
+        body = _as_text("".join(f"<div>{html.escape(p) or '<br>'}</div>" for p in paras))
         script = f'''
             tell application "Notes"
                 activate

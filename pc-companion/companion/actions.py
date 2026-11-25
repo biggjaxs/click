@@ -173,6 +173,10 @@ class Actions:
         task = a.get("task_id", "")
         if not high and kind in self.task_allow.get(task, set()):
             return
+        if not high and self.settings.get("auto_approve", False):
+            # "Always allow": Clicky acts without asking for everyday actions (risky ones still ask)
+            self.bridge.narrate.emit(title)
+            return
         req = ConfirmRequest(title=title, detail=detail, x=x, y=y, high_risk=high)
         self.bridge.confirmRequest.emit(req)
         decision = await asyncio.wrap_future(req.future)
@@ -180,6 +184,8 @@ class Actions:
             raise ActionError("The user said no on their screen. Don't try again unless they ask.")
         if decision == "task" and not high and task:
             self.task_allow.setdefault(task, set()).add(kind)
+        if decision == "always" and not high:
+            self.settings.set("auto_approve", True)
 
     def _guard_start(self) -> tuple[float, float]:
         if self.killed.is_set():

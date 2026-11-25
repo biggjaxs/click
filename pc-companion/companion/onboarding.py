@@ -124,8 +124,8 @@ class Onboarding(QWidget):
         p1.layout().insertWidget(0, Orb(170, accent), 0, Qt.AlignHCenter)
         # 2 cursor
         p2 = self._page("Meet Clicky, Click's own cursor", "When you ask where something is, Clicky glides "
-                        "over and points at it. Say \u201copen Notes with Clicky\u201d and Clicky does it for you. It never takes over your mouse, and it always asks before "
-                        "it clicks anything. Press Control + Option + Esc any time to stop everything.")
+                        "over and points at it. Say \u201copen Notes with Clicky\u201d and Clicky does it for you. Just say what you want, even several things at once. It asks before it clicks, until you "
+                        "choose Always allow (risky things like deleting always ask). Press Control + Option + Esc any time to stop everything.")
         demo = _button("Show me", False, accent)
         demo.clicked.connect(self.show_cursor.emit)
         p2.layout().addWidget(demo, 0, Qt.AlignLeft)

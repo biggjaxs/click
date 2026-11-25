@@ -287,7 +287,7 @@ def test_open_app_runs_as_one_approved_task(services):
     run(services.orchestrator.handle(send=Recorder(), text="open system settings", conversation_id=None,
                                      upload_ids=[], incognito_key=None, state=_state()))
     task = next(c for c in calls if c[:2] == ("skills", "run"))
-    assert task[2]["plan"] == [{"skill": "open_app", "app": "system settings"}]
+    assert task[2]["plan"] == [{"skill": "open_app", "app": "System Settings"}]
     assert ("event", "cursor", "rest", {}) in calls  # the cursor goes home after the answer
 
 
@@ -340,7 +340,7 @@ def test_open_system_settings_with_clicky(services):
                                      upload_ids=[], incognito_key=None, state=_state()))
     assert any(c[:2] == ("cursor", "summon") for c in calls)
     task = next(c for c in calls if c[:2] == ("skills", "run"))
-    assert task[2]["plan"] == [{"skill": "open_app", "app": "system settings"}]
+    assert task[2]["plan"] == [{"skill": "open_app", "app": "System Settings"}]
 
 
 def test_open_wifi_settings_is_one_instant_task(services):
@@ -361,3 +361,14 @@ def test_remember_is_instant_and_missing_conversation_does_not_crash(services):
     out = run(services.orchestrator.handle(send=Recorder(), text="remember that my dog is Max", conversation_id=987654,
                                            upload_ids=[], incognito_key=None, state=_state()))
     assert out["answer"].startswith("Got it")
+
+
+def test_open_notes_and_write_a_paragraph_is_composed_and_run(services):
+    calls = _wire(services, {("skills", "run"): {"status": "done", "steps": []}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Global warming harms people and nature."}]])
+    out = run(services.orchestrator.handle(
+        send=Recorder(), text="open notes, create a new note and put in a paragraph on why global warming is bad",
+        conversation_id=None, upload_ids=[], incognito_key=None, state=_state()))
+    task = next(c for c in calls if c[:2] == ("skills", "run"))
+    assert task[2]["plan"][-1] == {"skill": "new_note", "text": "Global warming harms people and nature."}
+    assert "Global warming harms" in out["answer"]

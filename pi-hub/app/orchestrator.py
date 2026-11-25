@@ -19,7 +19,8 @@ import time
 import uuid
 
 from .extract import is_image
-from .intents import SCREENISH, is_summon, mentions_clicky, parse_task, point_target, strip_clicky
+from . import language
+from .intents import SCREENISH, is_summon, mentions_clicky, point_target, strip_clicky
 from .llm import BackendUnavailable
 from .memory import estimate_tokens
 from .pc_link import PcError
@@ -82,6 +83,7 @@ class Orchestrator:
     def __init__(self, deps):
         self.deps = deps
         self.incognito_sessions: dict[str, list[dict]] = {}
+        self.dialog: dict = {}  # conversation -> what "it" / "that" / "again" refer to (language.DialogState)
         self.screen_context: dict | None = None  # filled by watch mode
         self.background: set[asyncio.Task] = set()
 
@@ -304,7 +306,7 @@ class Orchestrator:
         if point_note is None and backend.source == "pc" and mentions_clicky(text):
             point_note = await self._summon_clicky(text, send)
         if point_note is None:
-            point_note = await self._direct_task(text, send) if backend.source == "pc" else None
+            point_note = await self._direct_task(text, send, conversation_id) if backend.source == "pc" else None
         if point_note is None and backend.source == "pc":
             point_note = await self._direct_point(text, send)
         if isinstance(point_note, Reply):
@@ -361,15 +363,29 @@ class Orchestrator:
                          "notes. Try \u201cwhere is Wi\u2011Fi?\u201d or \u201copen Notes with Clicky\u201d.")
         return None
 
-    async def _direct_task(self, text: str, send) -> str | None:
-        """'Open Notes and type today's date', 'play X in Music', 'open Safari': run it as a skill task
-        (one OK from the user, Click's cursor shows each step). Returns a note for the model, or None."""
+    async def _direct_task(self, text: str, send, conversation_id=None) -> str | None:
+        """Everyday requests to DO things: "open Notes, make a new note and write a paragraph on X",
+        "close it", "play Levitating then turn the volume up", "do it again". The language layer turns the
+        sentence into steps (pronouns resolved from this conversation); anything it can't read goes to
+        the AI planner; writing is composed by the AI; then Clicky runs every step in one go."""
         deps = self.deps
-        task = parse_task(text)
-        if not (task and deps.link.connected and deps.permissions.enabled("input_actions")):
+        if not (deps.link.connected and deps.permissions.enabled("input_actions")):
             return None
-        await send({"type": "tool", "name": "click", "status": "running",
-                    "caption": f"{task['summary']} - waiting for your OK"})
+        st = self.dialog.setdefault(conversation_id or 0, language.DialogState())
+        task = language.plan(text, st)
+        if task is None and language.looks_like_command(text):
+            task = await self._llm_plan(text, st, send)
+        if not task:
+            return None
+        written = []
+        for step in task["plan"]:
+            if step.get("compose"):
+                what = step.pop("compose")
+                await send({"type": "tool", "name": "click", "status": "running", "caption": f"Writing {what[:60]}…"})
+                await deps.narrate(f"Writing {what[:60]}")
+                step["text"] = await self._compose(what)
+                written.append(step["text"])
+        await send({"type": "tool", "name": "click", "status": "running", "caption": f"{task['summary']}"})
         try:
             res = await deps.link.request("skills", "run", {"plan": task["plan"], "summary": task["summary"]},
                                           timeout=240, requires_confirmation=True)
@@ -379,10 +395,50 @@ class Orchestrator:
                 return None  # not an app: maybe a folder or button; let pointing handle it
             return Reply(f"I couldn't finish that ({task['summary']}): {exc}")
         await send({"type": "tool", "name": "click", "status": "done"})
+        language.remember(st, task["plan"], task["summary"])
         deps.audit.log("input", "skills.run", f"{task['summary']} -> {res.get('steps')}")
         extra = [d["result"] for d in res.get("steps", []) if "not in the library" in str(d.get("result"))]
-        return Reply(f"Done: {task['summary']}." + (" That song isn't in your library, so I opened Apple Music "
-                                                     "search for it." if extra else ""))
+        msg = f"Done: {task['summary']}."
+        if extra:
+            msg += " That song isn't in your library, so I opened Apple Music search for it."
+        if written:
+            msg += "\n\nHere's what I wrote:\n\n" + "\n\n".join(written)
+        return Reply(msg)
+
+    async def _compose(self, what: str) -> str:
+        """Have the AI write something for a note or to type ("a paragraph on why global warming is bad")."""
+        msgs = [{"role": "system", "content": "You write text that will be put straight into the user's document. "
+                 "Output only the text itself: no title, no intro like 'Sure', no quotes, no markdown."},
+                {"role": "user", "content": f"Write {what}."}]
+        out = []
+        try:
+            async for ev in self.deps.pc_backend.chat_stream(msgs, None, options={"num_predict": 450, "temperature": 0.7}):
+                if ev["type"] == "token":
+                    out.append(ev["text"])
+        except (PcError, BackendUnavailable) as exc:
+            raise PcError(f"the AI couldn't write it: {exc}") from exc
+        text = "".join(out).strip().strip('"').strip()
+        text = re.sub(r"^(?:sure|okay|ok|here(?:'s| is)[^:\n]*)[:!,.]\s*", "", text, flags=re.I).strip()
+        return re.sub(r"[*#`]+", "", text)
+
+    async def _llm_plan(self, text: str, st, send) -> dict | None:
+        """The AI turns a request the rules didn't cover into steps (checked against the allowed list)."""
+        msgs = [{"role": "system", "content": language.PLANNER_PROMPT.replace("{last_app}", st.last_app or "none")},
+                {"role": "user", "content": language.rewrite(text)}]
+        out = []
+        try:
+            async for ev in self.deps.pc_backend.chat_stream(msgs, None, fmt=language.PLAN_SCHEMA,
+                                                             options={"num_predict": 200, "temperature": 0}):
+                if ev["type"] == "token":
+                    out.append(ev["text"])
+            data = json.loads("".join(out))
+        except Exception:  # noqa: BLE001 - not understood: answer in the chat instead
+            return None
+        steps = language.validate_llm_plan(data)
+        if not steps:
+            return None
+        return {"plan": steps, "summary": language.summary_of(steps),
+                "open_only": len(steps) == 1 and steps[0]["skill"] == "open_app"}
 
     async def _direct_point(self, text: str, send) -> str | None:
         """'Show me where X is' / 'open X': find X ourselves and move Click's cursor there (and for
