@@ -149,7 +149,7 @@ class App:
         self.ask.command_fn = self._typed_lesson_command
         self.bridge.heard.connect(self._on_heard)
         self.bridge.voiceLevel.connect(self.ask.mic.set_level)
-        self.bridge.voiceStatus.connect(lambda t: (self.ask.status.setWordWrap(True), self.ask.status.setText(t)))
+        self.bridge.voiceStatus.connect(self.ask.set_status)
         # rescue mode: offer help when an error pop-up appears
         from .rescue import Watcher
 
@@ -229,8 +229,7 @@ class App:
     def _report_permissions(self) -> None:
         problems = self.platform.check_permissions()
         if problems and self.ask:
-            self.ask.status.setWordWrap(True)
-            self.ask.status.setText("Clicky needs permission: " + " ".join(problems))
+            self.ask.set_status("Clicky needs permission: " + " ".join(problems))
             self.notify("Clicky needs permission to see and point: " + " ".join(problems))
 
     def check_clicky(self) -> None:

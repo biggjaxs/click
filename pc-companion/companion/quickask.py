@@ -124,7 +124,7 @@ class QuickAsk(QWidget):
         chip_row = QHBoxLayout(self.chips)
         chip_row.setContentsMargins(0, 0, 0, 0)
         chip_row.setSpacing(6)
-        for label, ask in (("Where's Wi\u2011Fi?", "where is wifi"), ("Show me how to email", "show me how to send an email"),
+        for label, ask in (("Where's Wi\u2011Fi?", "where is wifi"), ("How to email", "show me how to send an email"),
                            ("Hi Clicky", "show me clicky")):
             c = QPushButton(label)
             c.setCursor(Qt.PointingHandCursor)
@@ -244,10 +244,20 @@ class QuickAsk(QWidget):
         def go():
             b.deleteLater()
             self._offer_btn = None
+            lay = self.chips.layout()
+            for i in range(lay.count()):
+                w = lay.itemAt(i).widget()
+                if w is not None and w is not b:
+                    w.show()
             self.send_text(question)
 
         b.clicked.connect(go)
-        self.chips.layout().insertWidget(0, b)
+        lay = self.chips.layout()
+        for i in range(lay.count()):  # the offer replaces the usual suggestions (no crowding)
+            w = lay.itemAt(i).widget()
+            if w is not None:
+                w.hide()
+        lay.insertWidget(0, b)
         self._offer_btn = b
         if not self.busy:
             self.chips.show()
@@ -260,15 +270,23 @@ class QuickAsk(QWidget):
         self._voice_turn = voice
         self._send()
 
+    def set_status(self, text: str):
+        """One tidy line: long messages end with … (the full text shows when you hover)."""
+        from PySide6.QtGui import QFontMetrics
+
+        self.status.setWordWrap(False)
+        self.status.setToolTip(text)
+        self.status.setText(QFontMetrics(self.status.font()).elidedText(text, Qt.ElideRight, 165))
+
     def set_listening(self, on: bool, note: str = ""):
         self.mic.set_on(on)
         if on:
             self.input.setPlaceholderText("Listening… just talk")
-            self.status.setText(note or "Listening… (stops when you stop talking)")
+            self.set_status(note or "Listening…")
         else:
             self.input.setPlaceholderText("Ask Click anything…")
             if note:
-                self.status.setText(note)
+                self.set_status(note)
 
     def _send(self):
         text = self.input.text().strip()
@@ -305,8 +323,7 @@ class QuickAsk(QWidget):
         if kind == "link":
             if not self.busy:
                 err = getattr(self, "hub_error", lambda: "")()
-                self.status.setText("Ready" if ev["ok"] else (f"Problem: {err[:120]}" if err else "Connecting to Click…"))
-                self.status.setWordWrap(True)
+                self.set_status("Ready" if ev["ok"] else (f"Problem: {err[:120]}" if err else "Connecting to Click…"))
         elif kind == "preview":
             # the answer, worked out while you type; press Enter and it's there instantly
             if not self.busy and _norm(ev.get("for", "")) == _norm(self.input.text()) and ev.get("text", "").strip():
