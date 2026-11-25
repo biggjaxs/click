@@ -124,7 +124,8 @@ def describe(step: dict) -> str:
     if k == "play_music":
         return f"Play “{step['query']}” in Music"
     if k == "new_note":
-        return f"Make a note: “{step['text'][:60]}”"
+        t = step.get("title")
+        return "Make a note" + (f" titled “{t[:40]}”" if t else "") + (f": “{step['text'][:50]}”" if step.get("text") else "")
     if k == "type_text":
         return f"Type “{step['text'][:60]}”"
     if k == "open_settings":
@@ -279,36 +280,65 @@ class Skills:
         return f"playing {res}"
 
     async def new_note(self, step: dict) -> str:
+        """A new note in Apple Notes with an optional title and text. The words are handed to Notes as
+        data (never pasted into the script), so any quotes, symbols or long paragraphs work. If Notes
+        won't take it, Clicky makes a new note and pastes the text in instead."""
         if sys.platform != "darwin":
             raise SkillError("Notes is Mac-only.")
-        text = step.get("text") or ""
-        await self._point("Notes", "Writing your note", fallback_center=True)
         import html
 
-        paras = [p.strip() for p in text.split("\n") if p.strip()] or [""]
-        body = _as_text("".join(f"<div>{html.escape(p) or '<br>'}</div>" for p in paras))
-        script = f'''
-            tell application "Notes"
-                activate
-                set n to make new note with properties {{body:"{body}"}}
-                show n
-                return name of n
-            end tell'''
+        title = (step.get("title") or "").strip()
+        text = (step.get("text") or "").strip()
+        await self._point("Notes", "Writing your note", fallback_center=True)
+        parts = []
+        if title:
+            parts.append(f"<div><h1>{html.escape(title)}</h1></div>")
+        for para in [p.strip() for p in text.split("\n") if p.strip()]:
+            parts.append(f"<div>{html.escape(para)}</div>")
+            parts.append("<div><br></div>")
+        body = "".join(parts) or "<div><br></div>"
+        script = """
+on run argv
+    set b to item 1 of argv
+    tell application "Notes"
+        activate
+        try
+            set n to make new note at folder 1 of default account with properties {body:b}
+        on error
+            set n to make new note with properties {body:b}
+        end try
+        show n
+        return id of n
+    end tell
+end run"""
         try:
-            await asyncio.to_thread(_osascript, script)
-        except SkillError as exc:
+            r = await asyncio.to_thread(subprocess.run, ["osascript", "-", body], input=script,
+                                        capture_output=True, text=True, timeout=40)
+            if r.returncode != 0:
+                err = r.stderr.strip()
+                if "-1743" in err or "Not authorized" in err:
+                    raise SkillError("macOS hasn't let Click control Notes yet. Open System Settings > Privacy & "
+                                     "Security > Automation, turn on Notes under Click, then try again.")
+                raise SkillError(err or "Notes didn't respond.")
+        except (SkillError, subprocess.TimeoutExpired) as exc:
             if "Automation" in str(exc):
                 raise
-            # some Notes setups need an explicit folder
-            alt = f'''
-                tell application "Notes"
-                    activate
-                    set n to make new note at folder 1 of default account with properties {{body:"{body}"}}
-                    show n
-                end tell'''
-            await asyncio.to_thread(_osascript, alt)
+            log.warning("Notes scripting failed (%s); making the note by hand", exc)
+            await self._note_by_hand(title, text)
         self.app.bridge.narrate.emit("Done: your note is open in Notes")
-        return f"made a note: {text[:80]}"
+        return f"made a note{f' titled {title}' if title else ''}" + (f": {text[:80]}" if text else "")
+
+    async def _note_by_hand(self, title: str, text: str) -> None:
+        """Fallback: open Notes, press Cmd+N, paste the words (like a person would)."""
+        from . import macinput
+
+        await asyncio.to_thread(subprocess.run, ["open", "-a", "Notes"], capture_output=True)
+        await asyncio.sleep(1.5)
+        await asyncio.to_thread(macinput.press, "cmd+n")
+        await asyncio.sleep(0.8)
+        words = (title + "\n\n" if title else "") + text
+        if words.strip():
+            await asyncio.to_thread(macinput.paste_text, words)
 
     async def type_text(self, step: dict) -> str:
         res = await self.app.actions.type_text({"text": step["text"], "risk": "change", "task_id": "skill-task"},

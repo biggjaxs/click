@@ -151,8 +151,15 @@ class App:
             QTimer.singleShot(500, self._selftest_check)
             return
         self._warm()
-        # The welcome tutorial shows every time Click opens (Skip closes it straight away).
-        self._onboard()
+        from . import __version__
+
+        # The welcome shows the first time and once after each update (menu bar > Show the welcome again
+        # brings it back any time). Otherwise Click opens straight to the orb and Ask box.
+        if self.settings.get("welcome_version") != __version__ or not self.settings.get("setup_done") \
+                or not self._models_present():
+            self._onboard()
+        else:
+            self._normal_launch()
 
     def _own_rects(self):
         """Where Click's own windows are (in screen coordinates), so 'find' never points at them."""
@@ -222,6 +229,9 @@ class App:
            "Chat part not running: " + (self.hub.last_error if self.hub else ""))
         ok(self.server.pi_connected, "Clicky is connected to the chat", "Clicky isn't connected to the chat")
         ok(not self.paused, "Not paused", "Everything is paused (menu bar > Resume)")
+        prev = config.config_dir() / "crash-previous.log"
+        if prev.exists():
+            ok(False, "", f"Click closed unexpectedly before. Details: {prev}")
         self.ghost.summon("This is Clicky. If you can see me, the cursor works!", True)
         QTimer.singleShot(3500, self.ghost.rest)
         box = QMessageBox()
@@ -546,6 +556,9 @@ class App:
 
     def _start_hotkeys(self) -> None:
         """Ctrl+Alt+Esc stops everything; Cmd+Shift+Space (Ctrl+Shift+Space on Windows) shows/hides the tile."""
+        if sys.platform == "darwin":
+            self._start_mac_hotkeys()
+            return
         try:
             from pynput import keyboard
 
@@ -554,6 +567,34 @@ class App:
                                                    toggle: self.bridge.toggleTile.emit})
             self._hotkey.daemon = True
             self._hotkey.start()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("hotkeys unavailable: %s", exc)
+
+    def _start_mac_hotkeys(self) -> None:
+        """macOS: watch for the shortcuts with AppKit on the MAIN thread. (A keyboard listener on a background
+        thread makes new macOS versions kill the app; that was the "Click just closes sometimes" bug.)"""
+        try:
+            from AppKit import NSEvent
+
+            ctrl, opt, cmd, shift = 1 << 18, 1 << 19, 1 << 20, 1 << 17
+            mask_keydown = 1 << 10
+
+            def check(event):
+                try:
+                    code, flags = event.keyCode(), event.modifierFlags()
+                    if code == 53 and flags & ctrl and flags & opt:
+                        self.kill()
+                    elif code == 49 and flags & cmd and flags & shift:
+                        self.bridge.toggleTile.emit()
+                except Exception:  # noqa: BLE001
+                    log.exception("hotkey handler")
+
+            def local(event):
+                check(event)
+                return event
+
+            self._hotkey = (NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(mask_keydown, check),
+                            NSEvent.addLocalMonitorForEventsMatchingMask_handler_(mask_keydown, local))
         except Exception as exc:  # noqa: BLE001
             log.warning("hotkeys unavailable: %s", exc)
 
@@ -878,6 +919,30 @@ def _webengine_env() -> None:
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = flags.strip()
 
 
+def _crash_log() -> None:
+    """If Click ever closes unexpectedly, the reason is written to crash.log (Check Clicky shows it)."""
+    import faulthandler
+
+    try:
+        path = config.config_dir() / "crash.log"
+        if path.exists() and path.stat().st_size > 0:
+            old = path.with_name("crash-previous.log")
+            path.replace(old)
+            logging.getLogger("click").warning("Click closed unexpectedly last time; details in %s", old)
+        global _crash_file
+        _crash_file = open(path, "w")  # noqa: SIM115 - kept open for the life of the app
+        faulthandler.enable(_crash_file, all_threads=True)
+        import signal
+
+        if hasattr(signal, "SIGTRAP"):  # macOS "dispatch assert" crashes arrive as SIGTRAP
+            faulthandler.register(signal.SIGTRAP, _crash_file, all_threads=True, chain=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_crash_file = None
+
+
 def main() -> int:
     _webengine_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -890,5 +955,13 @@ def main() -> int:
         QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     except Exception:  # noqa: BLE001
         pass
+    _crash_log()
     app = App()
-    return app.run()
+    code = app.run()
+    try:  # a normal quit: no crash to report
+        if _crash_file:
+            _crash_file.close()
+            (config.config_dir() / "crash.log").unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    return code

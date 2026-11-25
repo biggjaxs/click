@@ -44,12 +44,57 @@ _POLITE_TAIL = re.compile(r"(?:[,\s]+(?:for me|please|pls|thanks|thank you|right
                           r"if you can|if you could|on my (?:mac|computer|laptop|screen)|okay|ok))+[\s?.!]*$", re.I)
 
 
+_DESIRES = [  # "I want to listen to X" is a request in disguise: say it plainly
+    (r"^(?:i\s+(?:want|wanna|would like|'d like|need)\s+to\s+|let\s+me\s+|can\s+i\s+|could\s+i\s+|i'd\s+love\s+to\s+)"
+     r"(?:listen\s+to|hear)\s+(.+)$", r"play \1"),
+    (r"^put\s+on\s+(?!a\s|the\s+kettle)(.+)$", r"play \1"),
+    (r"^(?:listen\s+to|hear)\s+(?!you\b|me\b)(.+)$", r"play \1"),
+    (r"^(?:i\s+(?:want|wanna|'d like|would like)\s+to\s+|let\s+me\s+)(?:watch|see)\s+(.+?)\s+on\s+youtube$",
+     r"search \1 on youtube"),
+    (r"^(?:i\s+(?:need|want)|can\s+i\s+(?:get|have)|could\s+i\s+(?:get|have)|give\s+me|get\s+me|i'd\s+like)\s+"
+     r"(a\s+(?:new\s+|quick\s+)?note\b.*)$", r"make \1"),
+    (r"^(?:i\s+(?:need|want|have)\s+to|let\s+me)\s+(?:write|jot|note)\s+(?:down\s+)?(?!a\s+(?:note|paragraph|poem|"
+     r"story|essay|list))(.+)$", r"make a note saying \1"),
+    (r"^(?:i\s+(?:want|need)\s+to|let\s+me|i'd\s+like\s+to)\s+(?:check|see|look\s+at|read)\s+my\s+(\w+)$", r"open \1"),
+    (r"^(?:i\s+(?:want|need)\s+to|let\s+me|i'd\s+like\s+to)\s+(?:go\s+on|use|get\s+on)\s+(.+)$", r"open \1"),
+    (r"^(?:i\s+(?:want|need)\s+to|let\s+me)\s+(?:search|google|look\s+up)\s+(.+)$", r"search \1"),
+]
+_COMMAND_WORDS = ["open", "launch", "start", "close", "quit", "play", "pause", "write", "type", "make", "create",
+                  "search", "google", "show", "skip", "next", "notes", "safari", "music", "settings"]
+
+
+def _fix_typos(t: str) -> str:
+    """'opne notse and wirte hi' -> 'open notes and write hi'. Only command words get fixed, never your text."""
+    import difflib
+
+    words = t.split(" ")
+    content_started = False
+    for i, w in enumerate(words):
+        lw = w.lower().strip(",.")
+        if content_started or len(lw) < 4 or lw in _COMMAND_WORDS or lw in ("note", "notes"):
+            if lw in ("write", "type", "saying", "says", "titled", "called", "named", "about"):
+                content_started = True
+            continue
+        if i > 0 and words[i - 1].lower().strip(",.") not in ("and", "then", "a", "new", "the", "my", "to", "in", "open"):
+            continue
+        close = difflib.get_close_matches(lw, _COMMAND_WORDS, n=1, cutoff=0.74)
+        if close:
+            words[i] = close[0] + w[len(w.rstrip(",.")):]
+            if close[0] in ("write", "type"):
+                content_started = True
+    return " ".join(words)
+
+
 def rewrite(text: str) -> str:
     t = strip_clicky(text.strip())
     t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"[’‘]", "'", t)
     for _ in range(3):
         t = _POLITE_LEAD.sub("", t).strip()
         t = _POLITE_TAIL.sub("", t).strip()
+    t = _fix_typos(t.strip(" ,?.!"))
+    for pat, repl in _DESIRES:
+        t = re.sub(pat, repl, t, flags=re.I)
     return t.strip(" ,?.!")
 
 
@@ -62,7 +107,8 @@ def resolve(t: str, st: DialogState) -> str:
     if st.last_app:
         t = re.sub(r"\b(open|close|quit|exit|launch|reopen|switch to|go (?:back )?to|bring up|show)\s+"
                    r"(?:it|that|that app|the app|this app|that one)\b", rf"\1 {st.last_app}", t, flags=re.I)
-        t = re.sub(r"\b(in|into|on)\s+(?:it|there|that|that app|the app)\b", rf"\1 {st.last_app}", t, flags=re.I)
+        if not re.search(r"\b(?:open|launch|start|make|create|new)\b", t, re.I):
+            t = re.sub(r"\b(in|into|on)\s+(?:it|there|that|that app|the app)\b", rf"\1 {st.last_app}", t, flags=re.I)
     if st.last_song:
         t = re.sub(r"\bplay\s+(?:it|that|that song|the same song|the song)(?:\s+again)?\b", f"play {st.last_song}",
                    t, flags=re.I)
@@ -111,13 +157,29 @@ SITES = {"youtube": "https://www.youtube.com", "google": "https://www.google.com
          "chatgpt": "https://chatgpt.com", "github": "https://github.com", "spotify web": "https://open.spotify.com",
          "linkedin": "https://www.linkedin.com", "espn": "https://www.espn.com", "weather": "https://weather.com"}
 
-_NOTE_WORDS = r"(?:a\s+|the\s+|my\s+)?(?:new\s+|blank\s+|empty\s+)?(?:apple\s+)?notes?(?:\s+app)?"
+_NOTE_WORDS = (r"(?:me\s+|us\s+)?(?:a\s+|an\s+|the\s+|my\s+|one\s+)?(?:new\s+|blank\s+|empty\s+|quick\s+|little\s+|"
+               r"short\s+)*(?:apple\s+)?notes?(?:\s+app)?")
+# words that START a value; they are never part of the value itself ("titled keyboard" -> title "keyboard")
+_TITLE_CUE = r"(?:titled|entitled|called|named|with\s+(?:the\s+)?(?:title|name|heading)(?:\s+of)?|title(?:d)?(?:\s+it)?|heading)"
+_BODY_CUE = (r"(?:that\s+says|which\s+says|saying|that\s+reads|reading|with\s+(?:the\s+)?(?:text|words?|content|body)|"
+             r"containing|with|about|on|of|for|listing|:)")
+
+
+def _value(x: str) -> str:
+    """A clean value: no surrounding quotes, no trailing punctuation or filler."""
+    x = x.strip().strip('"“”‘’\'').strip()
+    x = re.sub(r"\s+(?:please|for me|thanks|thank you)$", "", x, flags=re.I)
+    return x.strip(" .,!?:;\"'“”")
 
 
 def _content(x: str, now) -> dict:
     """What to write: literal text ("hello", "today's date") or something the AI composes."""
     x = x.strip().strip('"“”').strip()
-    x = re.sub(r"^(?:in|down|out|that says|saying|which says|with|the words?|the text)\s+", "", x, flags=re.I)
+    for _ in range(2):
+        x = re.sub(r"^(?:in|down|out|that says|which says|saying|that reads|reading|with|the words?|the text|"
+                   r"this|the following|these words)\s*:?\s+", "", x, flags=re.I).strip().strip('"“”').strip()
+    if re.match(r"^about\s+", x, re.I):
+        return {"compose": "a short note " + x}
     if _COMPOSE.match(x) or _TOPIC_ONLY.match(x) or re.match(r"^(?:why|how|what|about)\b", x, re.I):
         return {"compose": x}
     return {"text": _expand(x, now)}
@@ -138,19 +200,31 @@ def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
         return [{"skill": "music_control", "action": "previous"}]
     # play a song
     m = re.match(r"^play\s+(?P<q>.+?)(?:\s+(?:on|in|from|with)\s+(?:apple\s+)?music(?:\s+app)?)?$", c, re.I)
-    if m and not re.match(r"^(?:some|a|music|something)\b", m.group("q"), re.I):
-        q = _clean_song(m.group("q"))
+    if m and not re.match(r"^(?:(?:some\s+)?music|something|anything|a\s+song|some\s+songs?)$", m.group("q"), re.I):
+        q = _clean_song(re.sub(r"^(?:some|a\s+little|a\s+bit\s+of)\s+", "", m.group("q"), flags=re.I))
         if q:
             return [{"skill": "open_app", "app": "Music"}, {"skill": "play_music", "query": q}]
     if re.match(r"^play\s+(?:some\s+)?music$", low):
         return [{"skill": "open_app", "app": "Music"}, {"skill": "music_control", "action": "play"}]
     # new note (optionally with its contents)
-    m = re.match(rf"^(?:make|create|start|add|open|write|take|do)\s+{_NOTE_WORDS}(?:\s*(?:,|:)?\s*(?:saying|that says|"
-                 rf"with|about|of|on|for|called|named)?\s+(?P<x>.+))?$", c, re.I)
-    if m and re.search(r"\bnotes?\b", low) and (m.group("x") or not re.match(r"^open\s+notes?(?:\s+app)?$", low)):
+    m = re.match(rf"^(?:make|create|start|add|open|write|take|do|give|get|need|want)\s+{_NOTE_WORDS}"
+                 rf"(?P<rest>(?:\s*[,:]?\s+.+)?)$", c, re.I)
+    if m and re.search(r"\bnotes?\b", low) and (m.group("rest") or not re.match(r"^open\s+notes?(?:\s+app)?$", low)):
         step = {"skill": "new_note"}
-        if m.group("x"):
-            step.update(_content(m.group("x"), now))
+        rest = m.group("rest").strip(" ,:")
+        t = re.match(rf"^{_TITLE_CUE}\s+(?P<title>.+?)(?:\s*(?:,|;|\.|\s+and\s+|\s+)(?:{_BODY_CUE})\s+(?P<x>.+))?$",
+                     rest, re.I)
+        if t:
+            step["title"] = _value(t.group("title"))
+            rest = t.group("x") or ""
+        else:
+            b = re.match(rf"^(?:{_BODY_CUE})\s+(?P<x>.+)$", rest, re.I)
+            if b:
+                cue = re.match(r"^\w+", rest).group(0).lower()
+                rest = ("about " + b.group("x")) if cue in ("about", "on") and not _COMPOSE.match(b.group("x")) \
+                    else b.group("x")
+        if rest:
+            step.update(_content(rest, now))
         ctx["note"] = step
         return [step]
     # write / type something
@@ -163,6 +237,8 @@ def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
                      r"(?P<x>.+)$(?P<where>)", c, re.I)
     if m:
         x, where = m.group("x"), re.sub(r"\s+app$", "", (m.group("where") or "").strip(), flags=re.I)
+        if where.lower() in ("it", "there", "that", "this", "this note", "that note", "the note", "here"):
+            where = "Notes" if ctx.get("note") is not None else (ctx.get("app") or "")
         body = _content(x, now)
         if where and re.search(r"\bnotes?\b", where, re.I):
             if ctx.get("note") is not None and not ({"text", "compose"} & set(ctx["note"])):
@@ -177,6 +253,11 @@ def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
         app = where or ctx.get("app") or ""
         if app.lower() in ("notes", "apple notes"):
             step = {"skill": "new_note", **body}
+            ctx["note"] = step
+            return [step]
+        if not app and (m.group("verb").lower() in ("jot", "jot down", "note down") or
+                        re.match(r"^write\s+down\b", c, re.I)):
+            step = {"skill": "new_note", **body}  # "write down eggs and milk": that's a note
             ctx["note"] = step
             return [step]
         if not app and (m.group("verb").lower() not in ("type", "enter") or "compose" in body):
@@ -231,7 +312,11 @@ _APP_NAMES = {"settings": "System Settings", "system settings": "System Settings
               "chrome": "Google Chrome", "google chrome": "Google Chrome", "textedit": "TextEdit", "text edit": "TextEdit",
               "facetime": "FaceTime", "app store": "App Store", "iphone mirroring": "iPhone Mirroring",
               "vscode": "Visual Studio Code", "vs code": "Visual Studio Code", "word": "Microsoft Word",
-              "excel": "Microsoft Excel", "powerpoint": "Microsoft PowerPoint", "teams": "Microsoft Teams"}
+              "excel": "Microsoft Excel", "powerpoint": "Microsoft PowerPoint", "teams": "Microsoft Teams",
+              "email": "Mail", "emails": "Mail", "mail": "Mail", "inbox": "Mail", "texts": "Messages",
+              "text messages": "Messages", "imessage": "Messages", "messages": "Messages", "calendar": "Calendar",
+              "photos": "Photos", "pictures": "Photos", "camera": "Photo Booth", "maps": "Maps", "files": "Finder",
+              "finder": "Finder", "reminders": "Reminders", "note": "Notes", "calculator": "Calculator", "terminal": "Terminal"}
 
 
 def nice_app(name: str) -> str:
@@ -336,19 +421,21 @@ PLAN_SCHEMA = {
     "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {
         "skill": {"type": "string", "enum": sorted(ALLOWED) + ["none"]},
         "app": {"type": "string"}, "text": {"type": "string"}, "compose": {"type": "string"},
-        "query": {"type": "string"}, "pane": {"type": "string"}, "url": {"type": "string"},
+        "query": {"type": "string"}, "pane": {"type": "string"}, "url": {"type": "string"}, "title": {"type": "string"},
         "action": {"type": "string"}}, "required": ["skill"]}}},
     "required": ["steps"]}
 
 PLANNER_PROMPT = """You turn a request for a Mac into steps. Skills:
 open_app(app) quit_app(app) open_settings(pane) play_music(query) music_control(action: play|pause|next|previous)
-new_note(text OR compose) type_text(text OR compose) open_url(url)
+new_note(title, text OR compose) type_text(text OR compose) open_url(url)
 Use "compose" when the AI must write it (e.g. "a paragraph on why recycling matters"), "text" for exact words.
+Values are ONLY the thing itself: never include command words like titled, called, named, saying, that says, about.
 If the request is a question or chat, not something to do on the Mac, return {"steps":[{"skill":"none"}]}.
 Examples:
 "fire up safari and search for pizza near me" -> {"steps":[{"skill":"open_app","app":"Safari"},{"skill":"open_url","url":"https://www.google.com/search?q=pizza+near+me"}]}
 "jot down eggs milk bread in a note" -> {"steps":[{"skill":"new_note","text":"eggs, milk, bread"}]}
 "get notes going and do a short poem about the ocean" -> {"steps":[{"skill":"new_note","compose":"a short poem about the ocean"}]}
+"start a note called groceries with apples and bread" -> {"steps":[{"skill":"new_note","title":"groceries","text":"apples and bread"}]}
 "shut spotify" -> {"steps":[{"skill":"quit_app","app":"Spotify"}]}
 "what is the capital of france" -> {"steps":[{"skill":"none"}]}
 Context: the last app used was "{last_app}". Answer with JSON only."""
@@ -388,8 +475,11 @@ def validate_llm_plan(data: dict) -> list[dict] | None:
             if not pane:
                 continue
             s["pane"] = pane
-        clean = {"skill": k, **{f: str(s[f])[:2000] for f in ("app", "text", "compose", "query", "pane", "url", "action")
-                                if s.get(f)}}
+        clean = {"skill": k, **{f: str(s[f])[:2000] for f in ("app", "text", "compose", "query", "pane", "url", "action",
+                                                              "title") if s.get(f)}}
+        for f in ("title", "text"):  # a small model sometimes copies the cue word into the value
+            if clean.get(f):
+                clean[f] = re.sub(rf"^(?:{_TITLE_CUE}|{_BODY_CUE})\s+", "", clean[f], flags=re.I).strip()
         if k in ("new_note", "type_text") and not ({"text", "compose"} & set(clean)):
             clean["text"] = ""
         steps.append(clean)

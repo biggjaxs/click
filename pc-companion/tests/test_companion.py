@@ -237,3 +237,11 @@ def test_fuzzy_app_names_like_spotlight():
     assert best_app("the spotify app", apps).endswith("Spotify.app")
     assert best_app("settings", apps).endswith("System Settings.app")
     assert best_app("zzzz", apps) is None
+
+
+def test_mac_typing_keys_are_known():
+    from companion.macinput import KEYCODES, MODS
+
+    for k in ("v", "n", "return", "esc", "space", "tab", "left"):
+        assert k in KEYCODES
+    assert MODS["cmd"] == 1 << 20 and MODS["shift"] == 1 << 17

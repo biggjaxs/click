@@ -49,3 +49,25 @@ def test_ai_plans_are_checked():
     assert validate_llm_plan({"steps": [{"skill": "rm -rf", "app": "x"}, {"skill": "open_app", "app": "Safari"}]}) == [
         {"skill": "open_app", "app": "Safari"}]
     assert validate_llm_plan({"steps": [{"skill": "open_url", "url": "file:///etc/passwd"}]}) is None
+
+
+def test_titles_and_values_never_include_command_words():
+    assert steps("open notes and make me a note titled keyboard")[-1] == {"skill": "new_note", "title": "keyboard", "text": ""}
+    assert steps("make a note called groceries with apples, bread and milk") == [
+        {"skill": "new_note", "title": "groceries", "text": "apples, bread and milk"}]
+    assert steps("create a new note titled 'Ideas' that says build a robot") == [
+        {"skill": "new_note", "title": "Ideas", "text": "build a robot"}]
+    assert steps("make a note titled keyboard and write a paragraph about mechanical keyboards in it") == [
+        {"skill": "new_note", "title": "keyboard", "compose": "a paragraph about mechanical keyboards"}]
+    assert steps("make a quick note: dentist tuesday") == [{"skill": "new_note", "text": "dentist tuesday"}]
+
+
+def test_indirect_requests_and_typos():
+    assert steps("I want to listen to Levitating")[-1] == {"skill": "play_music", "query": "Levitating"}
+    assert steps("put on some Drake")[-1] == {"skill": "play_music", "query": "Drake"}
+    assert steps("I need to write down eggs and milk") == [{"skill": "new_note", "text": "eggs and milk"}]
+    assert steps("let me check my email") == [{"skill": "open_app", "app": "Mail"}]
+    assert steps("opne safari") == [{"skill": "open_app", "app": "Safari"}]
+    assert steps("open notse and wirte hello there")[-1] == {"skill": "new_note", "text": "hello there"}
+    # your own words are never "corrected"
+    assert steps("make a note saying opne the windos")[-1]["text"] == "opne the windos"

@@ -12,6 +12,7 @@ import asyncio
 import logging
 import math
 import threading
+import sys
 import time
 
 from .gui import ConfirmRequest
@@ -239,6 +240,17 @@ class Actions:
         if await asyncio.to_thread(self.platform.focused_is_sensitive):
             raise ActionError("The focus moved to a password field, so Click stopped.")
         start = self._guard_start()
+        if sys.platform == "darwin":  # crash-safe typing from this background thread (see macinput.py)
+            from . import macinput
+
+            try:
+                done = await asyncio.to_thread(macinput.put_text, text,
+                                               lambda: self.killed.is_set() or self._user_moved(start))
+                if done < len(text):
+                    raise Stopped(f"Stopped after {done} characters because you moved your mouse or pressed stop.")
+            finally:
+                self.bridge.indicator.emit("control", False)
+            return {"status": "typed", "characters": len(text)}
         try:
             for i in range(0, len(text), 8):
                 if self.killed.is_set() or self._user_moved(start):
@@ -260,6 +272,16 @@ class Actions:
         x, y = (self.ghost.x, self.ghost.y) if self.ghost.visible else (aw.rect.center if aw else (100, 100))
         await self._confirm("keys", f"Press {keys}", f"In: {aw.title if aw else 'the active window'}", x, y, a)
         self._guard_start()
+        if sys.platform == "darwin":
+            from . import macinput
+
+            try:
+                await asyncio.to_thread(macinput.press, keys)
+            except ValueError as exc:
+                raise ActionError(str(exc)) from exc
+            finally:
+                self.bridge.indicator.emit("control", False)
+            return {"status": "pressed", "keys": keys}
         try:
             for k in combo:
                 self.keyboard.press(k)
