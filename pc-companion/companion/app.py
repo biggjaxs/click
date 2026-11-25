@@ -150,6 +150,22 @@ class App:
         self.bridge.heard.connect(self._on_heard)
         self.bridge.voiceLevel.connect(self.ask.mic.set_level)
         self.bridge.voiceStatus.connect(lambda t: (self.ask.status.setWordWrap(True), self.ask.status.setText(t)))
+        # rescue mode: offer help when an error pop-up appears
+        from .rescue import Watcher
+
+        self.bridge.rescueOffer.connect(self._offer_rescue)
+        self.rescue = Watcher(self)
+        if not self.selftest:
+            self.rescue.start()
+        from .recorder import Library, Recorder
+
+        self.recorder = Recorder(self)
+        self.library = Library(self.settings.dir)
+        from .screenmem import ScreenMemory
+
+        self.screen_memory = ScreenMemory(self)
+        if not self.selftest:
+            self.screen_memory.start()
         own = lambda: [w for w in (self.ask, self.tile, self.bubble) if w is not None and w.isVisible()]  # noqa: E731
         self.ghost.avoid_fn = lambda: [w.frameGeometry() for w in own() if w.windowOpacity() > 0.5]
         self.ghost.own_windows_fn = lambda: [w for w in (self.ask, self.tile) if w is not None]
@@ -628,6 +644,21 @@ class App:
             return True
         return False
 
+    def _offer_rescue(self, d: dict) -> None:
+        """A troubling pop-up is on screen: Clicky appears beside it and offers to explain it."""
+        from .rescue import question_for
+
+        r = d.get("rect")
+        if r:
+            x, y = self.ghost.clear_spot(r[0] + r[2] + 10, r[1] + 20)
+        else:
+            x, y = self.ghost.primary_center()
+        self.bridge.ghostMove.emit(float(x), float(y), "Need help with this? Click the orb, or press Control + Space "
+                                                       "and ask me.")
+        if self.ask:
+            self.ask.offer("Help with this pop-up", question_for(d))
+        self.notify(f"Need help with that message from {d.get('app') or 'an app'}? Click the orb.")
+
     def _lesson_context(self) -> str:
         """While a lesson runs, questions are about the step you're on."""
         ls = self.lesson
@@ -872,6 +903,51 @@ class App:
 
     async def action_scroll(self, p):
         return await self.actions.scroll(p)
+
+    async def skills_record(self, p):
+        """Teach-once recording: start / stop."""
+        if p.get("op") == "stop":
+            if not self.recorder.recording:
+                return {"name": "", "steps": [], "saved": False, "note": "I wasn't recording."}
+            return self.recorder.stop()
+        if sys.platform != "darwin":
+            raise RuntimeError("Recording skills is Mac-only for now.")
+        return {"message": self.recorder.start(str(p.get("name") or "my skill"))}
+
+    async def skills_library(self, p):
+        op = p.get("op")
+        if op == "find":
+            return {"skill": self.library.find(str(p.get("query", "")))}
+        if op == "delete":
+            return {"deleted": self.library.delete(str(p.get("name", "")))}
+        if op == "export":
+            from pathlib import Path as _P
+
+            dest = self.library.export(_P.home() / "Desktop" / "Click skills.clickskills")
+            return {"path": str(dest), "count": len(self.library.all())}
+        return {"skills": [{"name": d["name"], "steps": len(d["steps"]), "kind": d.get("kind", "")}
+                           for d in self.library.all()]}
+
+    async def skills_replay(self, p):
+        try:
+            return await self.skills.replay(p)
+        finally:
+            self.bridge.ghostRest.emit()
+
+    def import_skills(self) -> None:
+        """Menu bar > Import skills…: add skills someone shared with you (they're just steps, never code)."""
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(None, "Import Clicky skills", "", "Clicky skills (*.clickskills *.json)")
+        if path:
+            try:
+                n = self.library.import_file(path)
+                self.notify(f"Imported {n} skill{'s' if n != 1 else ''}. Say “show me how to …” or “do …” to use them.")
+            except Exception as exc:  # noqa: BLE001
+                self.notify(f"Couldn't import that file: {exc}")
+
+    async def skills_briefing(self, p):
+        return await self.skills.briefing(p)
 
     async def skills_guide(self, p):
         try:

@@ -176,6 +176,12 @@ class Memory:
                                    "ORDER BY id DESC LIMIT 500"):
                 out.append({"kind": "message", "ref_id": m["id"], "text": m["content"][:500],
                             "created_at": m["created_at"], "sim": _keyword_score(query, m["content"])})
+        if "screen" in kinds:
+            for m in self.db.query("SELECT id, app, title, text, created_at FROM screen_history ORDER BY id DESC "
+                                   "LIMIT 3000"):
+                t = f"{m['app']} - {m['title']}\n{m['text'][:600]}"
+                out.append({"kind": "screen", "ref_id": m["id"], "text": t, "created_at": m["created_at"],
+                            "sim": _keyword_score(query, t)})
         return [r for r in out if r["sim"] > 0]
 
     # ---- facts ------------------------------------------------------------------------------

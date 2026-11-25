@@ -76,7 +76,12 @@ _ASK = re.compile(r"^(?:can you\s+|could you\s+|please\s+)?(?:show\s+me\s+how\s+
 _COMPUTER = re.compile(r"\b(mac|computer|laptop|app|apps|email|e-mail|mail|note|notes|text|message|imessage|wi-?fi|"
                        r"settings?|screenshot|folder|file|files|trash|bookmark|safari|chrome|finder|calendar|wallpaper|"
                        r"download|install|password|printer|print|bluetooth|airdrop|dock|desktop|zoom|facetime|music|"
-                       r"photos?|keyboard|shortcut|window|tab|icon|menu|update|battery|volume|brightness)\b", re.I)
+                       r"photos?|keyboard|shortcut|window|tab|icon|menu|update|battery|volume|brightness|"
+                       r"blender|photoshop|lightroom|illustrator|premiere|after effects|final cut|imovie|garageband|"
+                       r"logic|davinci|resolve|obs|excel|word|powerpoint|outlook|keynote|pages|numbers|xcode|"
+                       r"vs ?code|visual studio|figma|canva|slack|discord|teams|spotify|steam|minecraft|firefox|"
+                       r"gmail|google (?:docs|sheets|slides|drive)|notion|terminal|preview|quicktime|textedit)\b",
+                       re.I)
 
 
 def find(text: str) -> tuple[str, list[dict]] | None:
@@ -99,7 +104,9 @@ LESSON_SCHEMA = {"type": "object", "properties": {"steps": {"type": "array", "it
     "app": {"type": "string"}, "target": {"type": "string"}, "say": {"type": "string"}}, "required": ["say"]}}},
     "required": ["steps"]}
 
-LESSON_PROMPT = """You teach someone to do a task on their Mac, one small step at a time (3 to 6 steps).
+LESSON_PROMPT = """You teach someone to do a task on their Mac, one small step at a time (3 to 10 steps).
+If reference material from the web is given, follow it closely (it's more accurate than memory) but rewrite
+it for a beginner. Use the exact names of menus, buttons and panels as they appear on screen.
 Each step: "say" = one short friendly instruction. Add "app" ONLY on the first step if an app must be opened
 (its exact Mac name, e.g. "Mail"). Add "target" = the exact visible label of the button or menu to click
 (e.g. "New Message", "File", "Send"), or leave it out if there's nothing to click.
@@ -121,7 +128,13 @@ def clean_lesson(data: dict) -> list[dict]:
         if s.get("target"):
             step["target"] = str(s["target"])[:40]
         out.append(step)
-    return out[:7]
+    return out[:10]
+
+
+def search_query(title: str) -> str:
+    """'How to add a cube in blender' -> 'how to add a cube in blender step by step mac'"""
+    t = re.sub(r"^(?:how to|here's how:)\s*", "", title, flags=re.I)
+    return f"how to {t} step by step mac"
 
 
 def as_text(title: str, steps: list[dict]) -> str:

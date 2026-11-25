@@ -74,6 +74,10 @@ ROUTES = {
     ("inference", "describe"): (None, "inference_describe", False),
     ("skills", "run"): ("actions", "skills_run", False),
     ("skills", "guide"): ("cursor", "skills_guide", False),
+    ("skills", "briefing"): ("files", "skills_briefing", False),
+    ("skills", "record"): ("actions", "skills_record", False),
+    ("skills", "library"): (None, "skills_library", False),
+    ("skills", "replay"): ("actions", "skills_replay", False),
 }
 
 

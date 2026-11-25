@@ -108,6 +108,16 @@ SCHEMA = [
         created_at REAL NOT NULL
     );
     """,
+    # v2: screen memory ("what was that website I looked at Tuesday?"), only when the user turns it on
+    """
+    CREATE TABLE IF NOT EXISTS screen_history (
+        id INTEGER PRIMARY KEY,
+        app TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL DEFAULT '',
+        text TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL
+    );
+    """,
 ]
 
 

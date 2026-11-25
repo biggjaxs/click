@@ -35,3 +35,9 @@ def test_phrasing(text, skill):
 @pytest.mark.parametrize("text", QUESTIONS)
 def test_questions_are_answered_not_acted_on(text):
     assert plan(text) is None
+
+
+@pytest.mark.parametrize("text,minutes", [("help me focus for 45 minutes", 45), ("focus mode for an hour", 60),
+                                          ("i need to focus", 25), ("i need to study for 2 hours", 120)])
+def test_focus(text, minutes):
+    assert plan(text)["plan"] == [{"skill": "focus", "minutes": minutes}]

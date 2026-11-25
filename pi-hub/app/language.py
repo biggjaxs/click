@@ -20,7 +20,7 @@ from .intents import _clean_song, _expand, settings_pane, strip_clicky
 
 ALLOWED = {"open_app", "quit_app", "open_settings", "play_music", "music_control", "new_note", "type_text",
            "open_url", "open_file", "append_note", "send_message", "email_draft", "reminder", "volume", "dark_mode",
-           "wifi", "screenshot", "keys", "lock_screen", "empty_trash"}
+           "wifi", "screenshot", "keys", "lock_screen", "empty_trash", "focus", "fill_form"}
 
 
 @dataclass
@@ -190,6 +190,24 @@ def _content(x: str, now) -> dict:
 
 def _extra_clause(c: str, low: str, now) -> list[dict] | None:
     """Notes you already have, messages, email, reminders, volume, dark mode, Wi-Fi, screenshots, files."""
+    # focus guard: "help me focus for 45 minutes", "focus mode for an hour", "stop focus"
+    if re.match(r"^(?:stop|end|cancel|turn off|exit|quit)\s+(?:the\s+)?focus(?:\s+(?:mode|time|session))?$|"
+                r"^i(?:'m| am)\s+done\s+focusing$", low):
+        return [{"skill": "focus", "action": "stop"}]
+    m = re.match(r"^(?:help me\s+|i need to\s+|let me\s+|let's\s+|start\s+(?:a\s+)?|turn on\s+|begin\s+)?"
+                 r"(?:focus|concentrate|study|get (?:some )?work done)(?:\s+(?:mode|time|session))?"
+                 r"(?:\s+(?:for|during)\s+(?P<n>an?|half an?|\d+)\s*(?P<u>hours?|hrs?|minutes?|mins?))?$", low)
+    if m and (m.group("n") or re.match(r"^(?:help me|i need to|start|turn on|begin|let)", low) or "mode" in low
+              or low == "focus"):
+        n = {"a": 1, "an": 1, "half a": 0.5, "half an": 0.5}.get(m.group("n") or "", None)
+        n = float(m.group("n")) if n is None and m.group("n") else (n or 0)
+        minutes = int(n * 60) if (m.group("u") or "").startswith("h") else int(n or 25)
+        return [{"skill": "focus", "minutes": max(5, minutes)}]
+    # forms: "fill out this form", "fill in my details", "autofill this"
+    if re.match(r"^(?:fill|autofill|auto-fill|complete)\s+(?:out\s+|in\s+)?(?:this|the|that|my)?\s*(?:form|page|"
+                r"details|info|information|application|signup|sign-up|registration)?(?:\s+(?:out|in|for me|with my "
+                r"(?:details|info|information)))*$", low) and re.search(r"form|detail|info|application|sign|regist|fill", low):
+        return [{"skill": "fill_form"}]
     # everyday shortcuts in the front app
     for pat, keys, what in _SHORTCUTS:
         if re.match(pat, low):
@@ -552,6 +570,10 @@ def describe(step: dict) -> str:
         return "turn Wi-Fi on" if step.get("on") else "turn Wi-Fi off"
     if k == "screenshot":
         return "take a screenshot"
+    if k == "fill_form":
+        return "fill in this form from your Contacts card"
+    if k == "focus":
+        return "stop focus time" if step.get("action") == "stop" else f"focus for {step.get('minutes', 25)} minutes"
     if k == "open_url":
         u = step["url"]
         return "search Google" if "google.com/search" in u else f"open {u.split('//')[-1].split('/')[0]}"

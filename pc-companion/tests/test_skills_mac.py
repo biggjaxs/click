@@ -209,3 +209,70 @@ def test_lesson_can_go_back_and_stop(monkeypatch):
     # step 1, "back" on step 2 -> step 1 again, step 2 clicked, "stop" on step 3
     assert out["steps_done"] == 2 and app.lesson["active"] is False
     assert sum("Step 1." in t for t in spoken) == 2 and spoken[-1].startswith("Okay, stopping")
+
+
+def test_rescue_only_offers_for_trouble_once():
+    import types as _t
+
+    from companion.rescue import Watcher, needs_help
+
+    assert needs_help({"title": "Couldn't connect", "text": "The server isn't responding."})
+    assert needs_help({"title": "", "text": "Are you sure you want to delete “Taxes”? This can't be undone."})
+    assert not needs_help({"title": "Save As", "text": "Where: Documents"})
+    dlg = {"app": "Pages", "title": "Error", "text": "The document could not be saved.", "buttons": ["OK"]}
+    app = _t.SimpleNamespace(paused=False, settings={"rescue_mode": True, "blocklist": ["1Password"]},
+                             platform=_t.SimpleNamespace(front_dialog=lambda: dlg))
+    w = Watcher(app)
+    assert w.check_once() == dlg and w.check_once() is None  # once per pop-up
+    app.settings["rescue_mode"] = False
+    w.seen.clear()
+    assert w.check_once() is None  # turned off in the menu
+
+
+def test_focus_guard_summary_and_nudge(monkeypatch):
+    import types as _t
+
+    from companion import focus as fmod
+
+    nudges = []
+    app = _t.SimpleNamespace(ghost=_t.SimpleNamespace(flags={}, primary_center=lambda: (700, 400)),
+                             bridge=_t.SimpleNamespace(ghostMove=_t.SimpleNamespace(emit=lambda *a: nudges.append(a)),
+                                                       narrate=_t.SimpleNamespace(emit=lambda *a: None)),
+                             notify=lambda t: None, paused=False)
+    f = fmod.Focus(app)
+    assert "25 minutes" in f.start(25) and app.ghost.flags["focus_until"] > 0
+    f.time_in = {"Pages": 1500.0, "Safari - YouTube": 300.0}
+    out = f.stop()
+    assert "Pages 25 min" in out and "5 min on distractions" in out and app.ghost.flags["focus_until"] == 0
+
+
+def test_form_filling_is_safe():
+    from companion.forms import parse_me, plan_fill
+
+    me = parse_me("first=Sam\nlast=Lee\nemail=sam@example.com\nphone=555 0100\ncity=Austin\njob=missing value\n")
+    assert me["name"] == "Sam Lee" and "job" not in me
+    fields = [{"label": "First name", "value": ""}, {"label": "Email address", "value": ""},
+              {"label": "Password", "value": ""}, {"label": "Card number", "value": ""},
+              {"label": "Security code", "value": ""}, {"label": "City", "value": "Dallas"},
+              {"label": "Favorite color", "value": ""}]
+    fill, unsure = plan_fill(fields, me)
+    assert [(f["label"], v) for f, v in fill] == [("First name", "Sam"), ("Email address", "sam@example.com")]
+    assert [f["label"] for f in unsure] == ["Favorite color"]  # passwords/cards/codes: never touched or shown
+
+
+def test_skill_library_find_export_import(tmp_path):
+    from companion.recorder import Library, simplify
+
+    lib = Library(tmp_path)
+    lib.save("export report", [{"app": "Numbers", "say": "Open Numbers."}, {"target": "Export", "say": "Click Export."}])
+    assert lib.find("how to export the report")["name"] == "export report"
+    assert lib.find("bake a cake") is None
+    out = lib.export(tmp_path / "x.clickskills")
+    other = Library(tmp_path / "friend")
+    assert other.import_file(out) == 1 and other.find("export report")
+    # imported skills are only data: unknown fields (like commands) are dropped
+    (tmp_path / "evil.clickskills").write_text('{"skills":[{"name":"x","steps":[{"target":"OK","run":"rm -rf ~"}]}]}')
+    assert other.import_file(tmp_path / "evil.clickskills") == 1
+    assert other.find("x")["steps"] == [{"target": "OK"}]
+    assert simplify([{"app": "A"}, {"app": "B"}, {"target": "Go"}, {"target": "Go"}, {"app": "C"}]) == [
+        {"app": "B"}, {"target": "Go"}]

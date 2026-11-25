@@ -110,6 +110,14 @@ jobs:
           pyinstaller --noconfirm --distpath dist --workpath build packaging/Click.spec
           codesign -dvv dist/Click.app 2>&1 | grep -E "Authority|Identifier" || true
 
+      - name: Check the bundled speech engine understands speech
+        run: |
+          W=$(find dist/Click.app -name whisper-cli -type f | head -1)
+          echo "engine: $W"; test -x "$W"
+          curl -sL -o "$RUNNER_TEMP/tiny.bin" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin
+          "$W" -m "$RUNNER_TEMP/tiny.bin" -f "$RUNNER_TEMP/whisper.cpp/samples/jfk.wav" -nt -np -l en -t 4 | tee heard.txt
+          grep -qi "ask not what your country" heard.txt
+
       - name: Check each Mac can stamp Click with its own signature
         run: |
           # No signing key is stored anywhere: every Mac makes its own on first install (selfsign.py).

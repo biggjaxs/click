@@ -105,6 +105,7 @@ class Bridge(QObject):
     heard = Signal(str, str)            # voice: (what you said, error)
     voiceLevel = Signal(float)          # how loud you're talking (0..1), for the mic button
     voiceStatus = Signal(str)           # e.g. "Downloading Clicky's voice... 40%"
+    rescueOffer = Signal(dict)          # a troubling pop-up appeared: offer help
 
 
 GLASS = QColor(22, 22, 26, 235)   # dark translucent card used for captions and status
@@ -451,6 +452,11 @@ class GhostController(QObject):
             pills.append(("Click is using your mouse  ·  Ctrl+Alt+Esc to stop", "#ef4444"))
         if self.flags["watch"]:
             pills.append(("Click is watching your screen", "#ef4444"))
+        if self.flags.get("recording"):
+            pills.append(("Recording a skill · say “stop recording” when done", "#ef4444"))
+        fu = self.flags.get("focus_until", 0)
+        if fu and time.time() < fu:
+            pills.append((f"Focus · {max(1, int((fu - time.time() + 59) // 60))} min left", "#22c55e"))
         if time.time() < self.flags["capture"]:
             pills.append(("Click looked at your screen", self.style["color"]))
         return pills
@@ -911,6 +917,27 @@ class Tray(QObject):
         self.auto_action.toggled.connect(lambda on: app_ctl.settings.set("auto_approve", bool(on)))
         menu.aboutToShow.connect(lambda: self.auto_action.setChecked(bool(app_ctl.settings.get("auto_approve", False))))
         menu.addAction(self.auto_action)
+        self.rescue_action = QAction("Offer help with error pop-ups")
+        self.rescue_action.setCheckable(True)
+        self.rescue_action.setChecked(bool(app_ctl.settings.get("rescue_mode", True)))
+        self.rescue_action.toggled.connect(lambda on: app_ctl.settings.set("rescue_mode", bool(on)))
+        menu.addAction(self.rescue_action)
+        self.memory_action = QAction("Remember what I see (private, on this computer)")
+        self.memory_action.setCheckable(True)
+        self.memory_action.setChecked(bool(app_ctl.settings.get("screen_memory", False)))
+        self.memory_action.toggled.connect(lambda on: app_ctl.settings.set("screen_memory", bool(on)))
+        menu.addAction(self.memory_action)
+        self.lessonvoice_action = QAction("Speak lesson steps")
+        self.lessonvoice_action.setCheckable(True)
+        self.lessonvoice_action.setChecked(bool(app_ctl.settings.get("lesson_voice", True)))
+        self.lessonvoice_action.toggled.connect(lambda on: app_ctl.settings.set("lesson_voice", bool(on)))
+        menu.addAction(self.lessonvoice_action)
+        imp = QAction("Import skills…")
+        imp.triggered.connect(app_ctl.import_skills)
+        menu.addAction(imp)
+        talk = QAction("Talk to Clicky (Control + Space)")
+        talk.triggered.connect(app_ctl.talk)
+        menu.addAction(talk)
         self.speak_action = QAction("Read answers aloud")
         self.speak_action.setCheckable(True)
         self.speak_action.setChecked(bool(app_ctl.settings.get("speak_answers", False)))

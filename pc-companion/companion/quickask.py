@@ -229,6 +229,31 @@ class QuickAsk(QWidget):
         self.adjustSize()
         self.input.setFocus()
 
+    def offer(self, label: str, question: str):
+        """A one-tap offer at the front of the suggestions (e.g. "Help with this pop-up")."""
+        old = getattr(self, "_offer_btn", None)
+        if old is not None:
+            old.deleteLater()
+        b = QPushButton(label)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setStyleSheet("QPushButton { background: rgba(250,204,21,0.16); color: #fff7d6; border: 1px solid "
+                        "rgba(250,204,21,0.55); border-radius: 11px; padding: 4px 9px; font-size: 11.5px; }"
+                        "QPushButton:hover { background: rgba(250,204,21,0.3); }")
+        b.setMinimumWidth(b.fontMetrics().horizontalAdvance(label) + 26)
+
+        def go():
+            b.deleteLater()
+            self._offer_btn = None
+            self.send_text(question)
+
+        b.clicked.connect(go)
+        self.chips.layout().insertWidget(0, b)
+        self._offer_btn = b
+        if not self.busy:
+            self.chips.show()
+        self.status.setText("Clicky can explain that pop-up for you.")
+        self.adjustSize()
+
     def send_text(self, text: str, voice: bool = False):
         """Ask something as if typed (used for voice): the answer is spoken back when voice=True."""
         self.input.setText(text)

@@ -93,6 +93,9 @@ class Platform:
         """True if the keyboard focus is in a password / secure field."""
         return False
 
+    def front_dialog(self) -> dict | None:
+        return None
+
     def raise_overlay(self, widget) -> None:
         widget.raise_()
 

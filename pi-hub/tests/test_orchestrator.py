@@ -428,3 +428,115 @@ def test_question_during_a_lesson_is_about_that_step(services):
     assert not any(c[:2] in (("skills", "guide"), ("skills", "run")) for c in calls)  # no new lesson or task
     first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
     assert "step 2" in first["messages"][-1]["content"]
+
+
+def test_app_lessons_are_built_from_a_real_tutorial(services, monkeypatch):
+    import json as _json
+
+    from app import websearch
+
+    async def fake_search(q, max_results=5):
+        return [{"title": "Add a cube", "url": "https://docs.example.org/blender/add-cube", "snippet": "..."}]
+
+    async def fake_fetch(url, max_chars=6000):
+        return {"url": url, "text": "In the 3D Viewport header, open the Add menu, choose Mesh, then Cube."}
+
+    monkeypatch.setattr(websearch, "web_search", fake_search)
+    monkeypatch.setattr(websearch, "fetch_page", fake_fetch)
+    calls = _wire(services, {("skills", "guide"): {"status": "done", "steps_done": 3, "steps": 3}})
+    lesson = {"steps": [{"app": "Blender", "say": "Open Blender."}, {"target": "Add", "say": "Open the Add menu."},
+                        {"target": "Mesh", "say": "Choose Mesh, then Cube."}]}
+    services.pc_backend = FakeBackend([[{"type": "token", "text": _json.dumps(lesson)}]])
+    out = run(services.orchestrator.handle(send=Recorder(), text="how do I add a cube in blender", conversation_id=None,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    prompt = services.pc_backend.calls[0]["messages"][-1]["content"]
+    assert "open the Add menu, choose Mesh" in prompt  # the lesson was written from the tutorial
+    g = next(c for c in calls if c[:2] == ("skills", "guide"))
+    assert [s.get("target") for s in g[2]["steps"]] == [None, "Add", "Mesh"]
+    assert "How to add a cube in blender" in out["answer"]
+
+
+def test_rescue_explains_a_popup_and_points_at_the_button(services):
+    import json as _json
+    import sys as _sys
+
+    _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2] / "pc-companion"))
+    from companion.rescue import question_for
+
+    d = {"app": "Pages", "title": "The document “Essay” could not be saved.", "text": "The disk is full.",
+         "buttons": ["OK", "Show in Finder"]}
+    calls = _wire(services, {("screen", "find_ui_element"): {"matches": [{"id": "b1", "name": "OK"}]}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": _json.dumps(
+        {"explanation": "Your Mac ran out of space, so Pages couldn't save.", "button": "OK"})}]])
+    out = run(services.orchestrator.handle(send=Recorder(), text=question_for(d), conversation_id=None, upload_ids=[],
+                                           incognito_key=None, state=_state()))
+    assert out["answer"].startswith("Your Mac ran out of space") and "**OK**" in out["answer"]
+    assert any(c[:2] == ("cursor", "move") and c[2]["element_id"] == "b1" for c in calls)
+
+
+def test_morning_briefing_uses_your_own_apps(services, monkeypatch):
+    from app import websearch
+
+    async def no_web(*a, **k):
+        return [{"title": "Sunny", "snippet": "72 and sunny", "url": "https://w.example"}]
+
+    monkeypatch.setattr(websearch, "web_search", no_web)
+    calls = _wire(services, {("skills", "briefing"): {"events": ["9:00 AM - Dentist"], "reminders": ["Pay rent"],
+                                                      "mail": ["UNREAD 3"], "notes": ["Keyboard"]}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Good morning! Dentist at 9."}]])
+    out = run(services.orchestrator.handle(send=Recorder(), text="Good morning!", conversation_id=None, upload_ids=[],
+                                           incognito_key=None, state=_state()))
+    assert out["answer"] == "Good morning! Dentist at 9."
+    prompt = services.pc_backend.calls[0]["messages"][0]["content"]
+    assert "Dentist" in prompt and "Pay rent" in prompt and "Keyboard" in prompt and "72 and sunny" in prompt
+    assert any(c[:2] == ("skills", "briefing") for c in calls)
+
+
+def test_screen_memory_answers_what_did_i_see(services):
+    import time as _time
+
+    _wire(services, {})
+    db = services.db
+    db.execute("INSERT INTO screen_history(app, title, text, created_at) VALUES (?, ?, ?, ?)",
+               ("Safari", "Cheap flights to Miami - Kayak", "Round trip from $129", _time.time() - 3600))
+    db.execute("INSERT INTO screen_history(app, title, text, created_at) VALUES (?, ?, ?, ?)",
+               ("Pages", "Essay draft", "Global warming", _time.time() - 7200))
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "That was Kayak, in Safari."}]])
+    out = run(services.orchestrator.handle(send=Recorder(), text="what was that website about flights i looked at?",
+                                           conversation_id=None, upload_ids=[], incognito_key=None, state=_state()))
+    assert out["answer"] == "That was Kayak, in Safari."
+    prompt = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]["messages"][-1]["content"]
+    assert "Cheap flights to Miami" in prompt
+
+
+def test_screen_memory_off_explains(services):
+    _wire(services, {})
+    out = run(services.orchestrator.handle(send=Recorder(), text="where did i see that recipe?", conversation_id=None,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    assert "Remember what I see" in out["answer"]
+
+
+def test_teach_once_record_list_and_do(services):
+    saved = {"name": "export report", "steps": [{"app": "Numbers", "say": "Open Numbers."},
+                                                 {"target": "Export", "say": "Click “Export”."}], "saved": True}
+    calls = _wire(services, {("skills", "record"): {"message": "Recording “export report”."},
+                             ("skills", "library"): {"skill": saved, "skills": [{"name": "export report", "steps": 2}]},
+                             ("skills", "replay"): {"status": "done", "steps_done": 2}})
+
+    def say(t):
+        return run(services.orchestrator.handle(send=Recorder(), text=t, conversation_id=None, upload_ids=[],
+                                                incognito_key=None, state=_state()))["answer"]
+
+    assert say("watch me do it, call it export report").startswith("Recording")
+    assert ("skills", "record", {"op": "start", "name": "export report"}) in calls
+    calls_before = len(calls)
+    services.link.request.__self__ if False else None
+    # stopping returns what was learned
+    async def stop_request(service, action, payload, **kw):
+        calls.append((service, action, payload))
+        return saved if (service, action) == ("skills", "record") else {"skill": saved}
+    services.link.request = stop_request
+    out = say("stop recording")
+    assert "Saved **export report** (2 steps)" in out and len(calls) > calls_before
+    out = say("do export report")
+    assert out == "Done: export report." and any(c[:2] == ("skills", "replay") for c in calls)

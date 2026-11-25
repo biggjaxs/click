@@ -95,7 +95,8 @@ def best_app(name: str, apps: dict[str, str]) -> str | None:
 
 SKILL_NAMES = ("open_app", "play_music", "new_note", "type_text", "open_settings", "quit_app", "music_control",
                "open_url", "open_file", "append_note", "send_message", "email_draft", "reminder", "volume",
-               "dark_mode", "wifi", "screenshot", "keys", "lock_screen", "empty_trash")
+               "dark_mode", "wifi", "screenshot", "keys", "lock_screen", "empty_trash", "focus", "fill_form")
+LOW_RISK = {"focus"}  # nothing to approve: it only watches which app is in front and nudges
 HIGH_RISK = {"send_message", "empty_trash"}  # these always ask first, even with "Always allow"
 
 
@@ -168,6 +169,10 @@ def describe(step: dict) -> str:
         return step.get("what") or f"Press {step.get('keys')}"
     if k == "lock_screen":
         return "Lock the screen"
+    if k == "fill_form":
+        return "Fill in this form from your Contacts card (you check it and press Submit)"
+    if k == "focus":
+        return "Stop focus time" if step.get("action") == "stop" else f"Focus for {step.get('minutes', 25)} minutes"
     if k == "empty_trash":
         return "Empty the Trash (can't be undone)"
     return k or "?"
@@ -188,8 +193,11 @@ class Skills:
         # one confirmation for the whole task, next to the orb (sending things always asks)
         hx, hy = self.app.ghost.home or (400, 300)
         risk = "high" if any(s.get("skill") in HIGH_RISK for s in plan) else "change"
-        await self.app.actions._confirm("task", summary, "\n".join(f"{i + 1}. {describe(s)}" for i, s in enumerate(plan)),
-                                        hx, hy, {"risk": risk, "task_id": ""})
+        if all(s.get("skill") in LOW_RISK for s in plan):
+            risk = None
+        if risk:
+            await self.app.actions._confirm("task", summary, "\n".join(f"{i + 1}. {describe(s)}" for i, s in enumerate(plan)),
+                                            hx, hy, {"risk": risk, "task_id": ""})
         done = []
         for step in plan:
             if self.app.actions.killed.is_set():
@@ -198,6 +206,120 @@ class Skills:
             done.append({"step": describe(step), "result": result})
             await asyncio.sleep(0.4)
         return {"status": "done", "steps": done}
+
+    # ---- doing a saved skill for you ----------------------------------------------------------------------------
+    async def replay(self, payload: dict) -> dict:
+        """Do a recorded skill: open each app and click each named button (one OK for the whole thing).
+        Where you typed when recording, Clicky stops and lets you type."""
+        skill = payload.get("skill") or {}
+        steps = (skill.get("steps") or [])[:30]
+        if not steps:
+            raise SkillError("That skill has no steps.")
+        name = skill.get("name", "that")
+        hx, hy = self.app.ghost.home or (400, 300)
+        await self.app.actions._confirm("task", f"Do “{name}”", "\n".join(
+            f"{i + 1}. {s.get('say') or s.get('target') or s.get('app')}" for i, s in enumerate(steps)),
+            hx, hy, {"risk": "change", "task_id": ""})
+        task = f"replay-{__import__('time').time()}"
+        self.app.actions.task_allow.setdefault(task, set()).add("click")  # approved once, above
+        done = 0
+        for st in steps:
+            if self.app.actions.killed.is_set():
+                raise SkillError("Stopped by the kill switch.")
+            if st.get("app"):
+                await self.open_app({"app": st["app"]})
+            elif st.get("target"):
+                found = None
+                for _ in range(4):
+                    found = await asyncio.to_thread(self.app.screen.find_ui_element, st["target"], None, True)
+                    if found.get("matches"):
+                        break
+                    await asyncio.sleep(0.8)
+                if not found or not found.get("matches"):
+                    raise SkillError(f"I couldn't find “{st['target']}” on screen (step {done + 1}).")
+                el = found["matches"][0]
+                if st.get("type_here"):
+                    await self.app.actions.teach_step({"element_id": el["id"], "timeout": 25,
+                                                       "instruction": "Type what you need here (then I'll carry on)"})
+                    await asyncio.sleep(6)
+                else:
+                    await self.app.actions.click({"element_id": el["id"], "description": st.get("say", ""),
+                                                  "risk": "change", "task_id": task})
+            done += 1
+            await asyncio.sleep(0.6)
+        self.app.bridge.narrate.emit(f"Done: {name}")
+        return {"status": "done", "steps_done": done}
+
+    # ---- morning briefing: gathered from your own apps, nothing uploaded -------------------------------------
+    async def briefing(self, payload: dict) -> dict:
+        """Today's reminders and events, unread email (only if Mail is open), notes you've been working on."""
+        if sys.platform != "darwin":
+            return {"note": "The briefing reads Mac apps; this computer isn't a Mac."}
+        out: dict = {}
+
+        async def grab(key, script, timeout=20):
+            try:
+                r = await asyncio.to_thread(subprocess.run, ["osascript", "-"], input=script, capture_output=True,
+                                            text=True, timeout=timeout)
+                if r.returncode == 0:
+                    out[key] = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()][:12]
+                elif "-1743" in r.stderr:
+                    out.setdefault("needs_permission", []).append(key)
+            except Exception:  # noqa: BLE001
+                pass
+
+        await asyncio.gather(
+            grab("reminders", """
+set out to ""
+set tmr to (current date) + 1 * days
+set time of tmr to 0
+tell application "Reminders"
+    try
+        repeat with r in (reminders whose completed is false and due date < tmr)
+            set out to out & name of r & linefeed
+        end repeat
+    end try
+end tell
+return out"""),
+            grab("events", """
+set out to ""
+set s to current date
+set time of s to 0
+set e to s + 1 * days
+tell application "Calendar"
+    repeat with c in calendars
+        try
+            repeat with ev in (every event of c whose start date >= s and start date < e)
+                set out to out & (time string of (start date of ev)) & " - " & (summary of ev) & linefeed
+            end repeat
+        end try
+    end repeat
+end tell
+return out""", timeout=30),
+            grab("mail", """
+if application "Mail" is not running then return ""
+set out to ""
+tell application "Mail"
+    set out to "UNREAD " & (unread count of inbox) & linefeed
+    try
+        repeat with m in (messages 1 thru 4 of inbox whose read status is false)
+            set out to out & (sender of m) & ": " & (subject of m) & linefeed
+        end repeat
+    end try
+end tell
+return out"""),
+            grab("notes", """
+set out to ""
+tell application "Notes"
+    try
+        repeat with n in (notes whose modification date > ((current date) - 2 * days))
+            set out to out & (name of n) & linefeed
+        end repeat
+    end try
+end tell
+return out"""),
+        )
+        return out
 
     # ---- guided lessons: "show me how to send an email" ---------------------------------------------------------
     async def guide(self, payload: dict) -> dict:
@@ -648,6 +770,51 @@ end run""", step.get("text", ""), *parts)
         await asyncio.to_thread(subprocess.run, ["screencapture", "-x", str(path)])
         self.app.bridge.narrate.emit("Screenshot saved to your Desktop")
         return f"saved a screenshot to {path}"
+
+    async def fill_form(self, step: dict) -> str:
+        """Fill the form in front from your Contacts card; highlight what it couldn't fill. Never submits."""
+        if sys.platform != "darwin":
+            raise SkillError("Form filling is Mac-only for now.")
+        from . import forms
+
+        fields = await asyncio.to_thread(self.app.platform.form_fields)
+        if not fields:
+            raise SkillError("I couldn't find any boxes to fill in the window in front. Click into the form first.")
+        me = forms.parse_me(await self._script(forms.ME_SCRIPT))
+        if not me:
+            raise SkillError("Your card in Contacts is empty. Open Contacts > Card > Go to My Card and add your "
+                             "details, then try again.")
+        fill, unsure = forms.plan_fill(fields, me)
+        if not fill:
+            raise SkillError("I didn't find boxes I could safely fill from your Contacts card.")
+        done = 0
+        for f, value in fill:
+            ok = await asyncio.to_thread(self.app.platform.set_field, f, value)
+            if not ok:  # some web forms only notice typing: click into it and type like a person
+                from . import macinput
+
+                await asyncio.to_thread(macinput.press, "cmd+a")
+                await asyncio.to_thread(macinput.put_text, value)
+            done += 1
+            r = f["rect"]
+            self.app.bridge.ghostMove.emit(float(r.x + r.w - 8), float(r.y + r.h / 2), f"{f['label'] or 'Filled'}")
+            await asyncio.sleep(0.35)
+        for f in unsure[:8]:
+            r = f["rect"]
+            self.app.bridge.ghostHighlight.emit(float(r.x), float(r.y), float(r.w), float(r.h), "Please check")
+        tip = f" Please check the {len(unsure)} highlighted box{'es' if len(unsure) != 1 else ''}." if unsure else ""
+        self.app.bridge.narrate.emit(f"Filled {done} boxes.{tip} I didn't press Submit.")
+        return f"filled {done} boxes ({', '.join(f['label'] for f, _ in fill)[:200]}); {len(unsure)} left for you"
+
+    async def focus(self, step: dict) -> str:
+        f = getattr(self.app, "focus", None)
+        if f is None:
+            from .focus import Focus
+
+            f = self.app.focus = Focus(self.app)
+        if step.get("action") == "stop":
+            return f.stop()
+        return f.start(int(step.get("minutes") or 25))
 
     async def keys(self, step: dict) -> str:
         """Everyday shortcuts in the app you're using: new tab, undo, copy, paste, save..."""

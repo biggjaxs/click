@@ -230,6 +230,26 @@ async def lifespan(app: FastAPI):
     s.link.event_handlers["system.kill"] = on_kill
     s.link.event_handlers["system.pause"] = on_pause
     s.link.event_handlers["system.capabilities"] = on_capabilities
+
+    def on_seen(payload):
+        """Screen memory: a note of what was on screen (only sent when the user turned it on)."""
+        async def store():
+            app, title = str(payload.get("app", ""))[:80], str(payload.get("title", ""))[:200]
+            text = str(payload.get("text", ""))[:1500]
+            rid = s.db.execute("INSERT INTO screen_history(app, title, text, created_at) VALUES (?, ?, ?, ?)",
+                               (app, title, text, float(payload.get("at") or time.time())))
+            try:
+                await s.memory.index("screen", rid, f"{app} - {title}\n{text[:600]}")
+            except Exception:  # noqa: BLE001
+                pass
+            # keep 30 days
+            old = s.db.query("SELECT id FROM screen_history WHERE created_at < ?", (time.time() - 30 * 86400,))
+            for r in old:
+                s.db.execute("DELETE FROM screen_history WHERE id = ?", (r["id"],))
+                s.db.execute("DELETE FROM embeddings WHERE kind = 'screen' AND ref_id = ?", (r["id"],))
+        asyncio.create_task(store())
+
+    s.link.event_handlers["system.seen"] = on_seen
     s.pairing.on_paired = s.link.reconnect_now
     s.audit.listeners.append(lambda e: asyncio.get_event_loop().create_task(s._broadcast({"type": "activity", "entry": e})))
     s.link.start()

@@ -181,13 +181,114 @@ class MacPlatform(Platform):
                         out.append(Element(name=str(name)[:80], role="MenuBarItem", rect=rect, window_title="Menu bar"))
         return out
 
+    def front_dialog(self) -> dict | None:
+        """The pop-up in front (an alert, an error sheet, a "not responding" box...), or None.
+        Returns its app, title, message text, button names and where it is. Never looks inside dialogs that
+        have password fields."""
+        ws = NSWorkspace.sharedWorkspace()
+        front = ws.frontmostApplication()
+        if front is None:
+            return None
+        app = AXUIElementCreateApplication(front.processIdentifier())
+        win = _attr(app, "AXFocusedWindow")
+        if win is None:
+            return None
+        sub = str(_attr(win, "AXSubrole") or "")
+        sheet = next((c for c in (_attr(win, "AXChildren") or []) if _attr(c, "AXRole") == "AXSheet"), None)
+        box = sheet if sheet is not None else win
+        texts, buttons, secure = [], [], False
+
+        def walk(el, depth=0):
+            nonlocal secure
+            if depth > 4 or len(texts) > 30:
+                return
+            for c in _attr(el, "AXChildren") or []:
+                role = str(_attr(c, "AXRole") or "")
+                if (_attr(c, "AXSubrole") or "") == "AXSecureTextField":
+                    secure = True
+                if role == "AXStaticText":
+                    v = str(_attr(c, "AXValue") or "").strip()
+                    if v:
+                        texts.append(v[:300])
+                elif role == "AXButton":
+                    t = str(_attr(c, "AXTitle") or _attr(c, "AXDescription") or "").strip()
+                    if t and t not in buttons:
+                        buttons.append(t[:40])
+                walk(c, depth + 1)
+
+        walk(box)
+        rect = _rect_of(box)
+        is_dialog = sheet is not None or sub in ("AXDialog", "AXSystemDialog")
+        small = rect is not None and rect.w < 760 and rect.h < 520
+        if secure or not texts or not buttons or not (is_dialog or small):
+            return None
+        title = str(_attr(win, "AXTitle") or "")
+        return {"app": str(front.localizedName() or ""), "title": title, "text": " ".join(texts)[:900],
+                "buttons": buttons[:6], "rect": rect.as_list() if rect else None}
+
+    def form_fields(self) -> list[dict]:
+        """Text boxes in the window in front, with the label people see next to each one. Password fields
+        are left out entirely."""
+        ws = NSWorkspace.sharedWorkspace()
+        front = ws.frontmostApplication()
+        if front is None:
+            return []
+        win = _attr(AXUIElementCreateApplication(front.processIdentifier()), "AXFocusedWindow")
+        if win is None:
+            return []
+        fields, last_text = [], [""]
+
+        def label_of(el) -> str:
+            t = _attr(el, "AXTitleUIElement")
+            for v in ((_attr(t, "AXValue") if t is not None else None), _attr(el, "AXDescription"),
+                      _attr(el, "AXPlaceholderValue"), _attr(el, "AXTitle"), _attr(el, "AXHelp")):
+                if v and str(v).strip():
+                    return str(v).strip()
+            return last_text[0]
+
+        def walk(el, depth=0):
+            if depth > 14 or len(fields) >= 40:
+                return
+            for c in _attr(el, "AXChildren") or []:
+                role = str(_attr(c, "AXRole") or "")
+                sub = str(_attr(c, "AXSubrole") or "")
+                if role == "AXStaticText":
+                    v = str(_attr(c, "AXValue") or "").strip()
+                    if v:
+                        last_text[0] = v[:80]
+                elif role in ("AXTextField", "AXTextArea", "AXComboBox") and sub != "AXSecureTextField":
+                    rect = _rect_of(c)
+                    if rect and rect.w > 20:
+                        fields.append({"ax": c, "label": label_of(c)[:80], "value": str(_attr(c, "AXValue") or ""),
+                                       "rect": rect})
+                walk(c, depth + 1)
+
+        walk(win)
+        return fields
+
+    def set_field(self, field: dict, value: str) -> bool:
+        """Put text straight into a text box (no typing); True if it took."""
+        from ApplicationServices import AXUIElementSetAttributeValue
+
+        el = field["ax"]
+        AXUIElementSetAttributeValue(el, "AXFocused", True)
+        err = AXUIElementSetAttributeValue(el, "AXValue", value)
+        return err == 0 and str(_attr(el, "AXValue") or "") == value
+
     def element_at(self, x: float, y: float) -> Element | None:
         err, el = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), float(x), float(y), None)
         if err != 0 or el is None:
             return None
         rect = _rect_of(el) or Rect(int(x), int(y), 1, 1)
-        name = _attr(el, "AXTitle") or _attr(el, "AXDescription") or _attr(el, "AXValue") or ""
-        return Element(name=str(name)[:120], role=_role_name(_attr(el, "AXRole") or ""), rect=rect,
+        role = str(_attr(el, "AXRole") or "")
+        if role in ("AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"):
+            # a text box: name it by its label, never by what's typed in it
+            t = _attr(el, "AXTitleUIElement")
+            name = ((_attr(t, "AXValue") if t is not None else None) or _attr(el, "AXDescription")
+                    or _attr(el, "AXPlaceholderValue") or _attr(el, "AXTitle") or "")
+        else:
+            name = _attr(el, "AXTitle") or _attr(el, "AXDescription") or _attr(el, "AXValue") or ""
+        return Element(name=str(name)[:120], role=_role_name(role), rect=rect,
                        is_password=(_attr(el, "AXSubrole") or "") == "AXSecureTextField")
 
     def focused_is_sensitive(self) -> bool:
