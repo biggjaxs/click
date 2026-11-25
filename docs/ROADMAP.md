@@ -138,3 +138,18 @@ every new version arrives by itself.
   in plain words.
 - **Smoother UI motion:** messages glide in and the active step shimmers.
 - **Bubble ideas for later:** react to voice volume; change colour by mood; snap to screen edges.
+
+## Next version (1.3) - top items
+1. **Built-in engine (no Ollama).** Bundle llama.cpp's server in Click.app (Metal on Apple Silicon,
+   CPU on Intel). Download the Qwen3-VL model files (GGUF + vision projector) with our own progress
+   bar. Switch `inference.py` to its OpenAI-style API (streaming, tools, images), and use an
+   embedding model for memory search. Stop the engine after 10 idle minutes. The Pi box keeps
+   Ollama. About 1-2 sessions; tool calling and images may need tuning.
+2. **Official app.** Apple Developer Program ($99/year): signed and notarized builds, no "Open
+   Anyway", permissions survive updates. Then self-updating (download once).
+3. **Own brain ("click-brain").** Fine-tune Qwen3-VL on Click's own examples (voice, tool use,
+   cursor explanations), roughly $10-100 on a rented GPU. Training from scratch isn't realistic.
+4. **Fully native look (later).** Rebuild the chat in SwiftUI once features settle. Today the
+   bubble and windows are native and only the chat inside is web technology (like Slack or the
+   ChatGPT/Claude desktop apps).
+5. **Name check** before going public (e.g. "Clicky" is an existing analytics product).
