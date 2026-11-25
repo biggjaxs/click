@@ -11,7 +11,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Sign a copy of an app with a brand-new local key
         run: |
-          ditto /System/Applications/Calculator.app "$RUNNER_TEMP/Test.app"
+          A="$RUNNER_TEMP/Test.app/Contents"; mkdir -p "$A/MacOS"
+          cp /bin/echo "$A/MacOS/Test"
+          printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Test</string><key>CFBundleIdentifier</key><string>app.click.test</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>' > "$A/Info.plist"
           cd pc-companion
           python3 - <<'PY'
           import os, sys, tempfile
