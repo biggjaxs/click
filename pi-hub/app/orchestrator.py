@@ -57,6 +57,11 @@ POINT_RE = re.compile(
 OPEN_RE = re.compile(r"^(?:can you |could you |please |hey click,? )*(?:open|launch|start|go to)\s+(?:the |my )?"
                      r"(?P<t>.+?)(?:\s+(?:app|application))?(?:\s+for me)?(?:\s+please)?\s*[?.!]*$", re.I)
 
+class Reply(str):
+    """A finished answer from Clicky's own quick paths: sent straight to the user, no AI model needed
+    (this is what makes "where is X" / "open X" / "show me Clicky" answer in about a second)."""
+
+
 SCREEN_INTENT = re.compile(
     r"\b(screen|window|monitor|on my (pc|computer|mac|laptop)|what am i (looking at|doing)|what('s| is) this|"
     r"this (error|page|message|window|app|popup|dialog)|where('s| is)|show me|point (at|to)|click (on|the)|"
@@ -293,17 +298,22 @@ class Orchestrator:
             point_note = await self._direct_task(text, send) if backend.source == "pc" else None
         if point_note is None and backend.source == "pc":
             point_note = await self._direct_point(text, send)
-        if point_note:
-            memory_note = (memory_note + "\n" if memory_note else "") + point_note
-        screen = None if point_note else (await self._prefetch_screen(text, send) if backend.source == "pc" else None)
-        images = [screen["image"]] if screen and screen.get("image") else []
-        if backend.source == "pc" and deps.link.capabilities.get("vision_in_chat"):
-            images += self._upload_images(image_upload_ids)
+        if isinstance(point_note, Reply):
+            answer, source, model = str(point_note), "pc", "clicky"
+            tool_log = {"calls": [], "images": [], "first_ms": int((time.perf_counter() - t_start) * 1000)}
+            await send({"type": "token", "text": answer})
+        else:
+            if point_note:
+                memory_note = (memory_note + "\n" if memory_note else "") + point_note
+            screen = None if point_note else (await self._prefetch_screen(text, send) if backend.source == "pc" else None)
+            images = [screen["image"]] if screen and screen.get("image") else []
+            if backend.source == "pc" and deps.link.capabilities.get("vision_in_chat"):
+                images += self._upload_images(image_upload_ids)
 
-        answer, source, model, tool_log = await self._run_loop(
-            send=send, backend=backend, text=text, memory_note=memory_note, recalled=recalled,
-            conversation_id=conversation_id, incognito_key=incognito_key, task_id=task_id, state=state,
-            incognito=incognito, screen=screen, images=images, t_start=t_start)
+            answer, source, model, tool_log = await self._run_loop(
+                send=send, backend=backend, text=text, memory_note=memory_note, recalled=recalled,
+                conversation_id=conversation_id, incognito_key=incognito_key, task_id=task_id, state=state,
+                incognito=incognito, screen=screen, images=images, t_start=t_start)
 
         total_ms = int((time.perf_counter() - t_start) * 1000)
         meta = {"source": source, "model": model, "tools": tool_log["calls"], "images": tool_log["images"],
@@ -338,9 +348,8 @@ class Orchestrator:
             return None
         if pure:
             await send({"type": "tool", "name": "ghost_move", "status": "done"})
-            return ("(The user called Clicky, your on-screen cursor, and it just appeared in the middle of their "
-                    "screen. Say hi as Clicky in one short sentence and say what you can do (point at things, open "
-                    "apps, play music, write notes). Don't call any tools.)")
+            return Reply("Hi, I'm Clicky! I can point at anything on your screen, open apps, play music and write "
+                         "notes. Try \u201cwhere is Wi\u2011Fi?\u201d or \u201copen Notes with Clicky\u201d.")
         return None
 
     async def _direct_task(self, text: str, send) -> str | None:
@@ -359,13 +368,12 @@ class Orchestrator:
             await send({"type": "tool", "name": "click", "status": "failed", "error": str(exc)})
             if task.get("open_only") and "Couldn't find an app" in str(exc):
                 return None  # not an app: maybe a folder or button; let pointing handle it
-            return f"(You tried to do this on the user's computer: {task['summary']}. It didn't work: {exc}. " \
-                   "Tell them plainly in one or two sentences. Don't call any tools.)"
+            return Reply(f"I couldn't finish that ({task['summary']}): {exc}")
         await send({"type": "tool", "name": "click", "status": "done"})
         deps.audit.log("input", "skills.run", f"{task['summary']} -> {res.get('steps')}")
-        steps = "; ".join(f"{d['step']}: {d['result']}" for d in res.get("steps", []))
-        return (f"(You just did this on the user's computer: {steps}. Tell them in one short sentence that it's "
-                "done. Don't call any tools.)")
+        extra = [d["result"] for d in res.get("steps", []) if "not in the library" in str(d.get("result"))]
+        return Reply(f"Done: {task['summary']}." + (" That song isn't in your library, so I opened Apple Music "
+                                                     "search for it." if extra else ""))
 
     async def _direct_point(self, text: str, send) -> str | None:
         """'Show me where X is' / 'open X': find X ourselves and move Click's cursor there (and for
@@ -386,7 +394,7 @@ class Orchestrator:
             found = await deps.link.request("screen", "find_ui_element", {"query": target}, timeout=30)
         except PcError as exc:
             await send({"type": "tool", "name": "find_ui_element", "status": "failed", "error": str(exc)})
-            return f"(You tried to find '{target}' on the user's screen but it failed: {exc}. Say so briefly.)"
+            return Reply(f"I couldn't look for \u201c{target}\u201d: {exc}")
         matches = found.get("matches") or []
         if not matches:
             await send({"type": "tool", "name": "find_ui_element", "status": "failed", "error": "not found"})
@@ -395,8 +403,10 @@ class Orchestrator:
             hint = found.get("permission_problem") or ""
             if hint:
                 await send({"type": "notice", "text": "Clicky can't see your screen's buttons yet. " + hint})
-            return (f"(You looked for '{target}' on the user's screen and couldn't find it. {hint} Say so in one "
-                    "sentence and say where it usually is.)")
+            if hint:
+                return Reply(f"I couldn't find \u201c{target}\u201d because Clicky can't see your screen yet. {hint}")
+            return Reply(f"I couldn't find \u201c{target}\u201d on your screen right now. If it's an app, try "
+                         f"\u201copen {target}\u201d.")
         await send({"type": "tool", "name": "find_ui_element", "status": "done"})
         best = matches[0]
         name = best.get("name") or target
@@ -417,14 +427,13 @@ class Orchestrator:
                                                                   "risk": "change", "task_id": "open"},
                                               timeout=150, requires_confirmation=True)
                 await send({"type": "tool", "name": "click", "status": "done"})
-                return (f"(You found '{name}' ({where}) and clicked it to open it: {res.get('status')}. Confirm in one "
-                        "short sentence. Don't call any tools.)")
+                return Reply(f"Opened {name}." if res.get("status") in ("done", "clicked", "ok", None)
+                             else f"{name}: {res.get('status')}.")
             except PcError as exc:
                 await send({"type": "tool", "name": "click", "status": "failed", "error": str(exc)})
-                return f"(You pointed at '{name}' but didn't click it: {exc}. Say so in one sentence. Don't call tools.)"
-        return (f"(You already moved your cursor to '{name}'" + (f" in the {where}" if where else "") +
-                f" to show the user '{target}'. {note} Tell them in one or two short sentences what it is and what to do. "
-                "Don't call any tools.)")
+                return Reply(f"I pointed at {name} but didn't click it: {exc}")
+        return Reply(note or (f"Here's {name}" + (f" in the {where}" if where in ("Dock", "Menu bar", "Desktop")
+                                                      else "") + ". Clicky is pointing at it."))
 
     async def prewarm(self, conversation_id: int | None, partial: str) -> None:
         """While the user types: have the model read the conversation so far, so pressing Enter only

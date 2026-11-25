@@ -10,6 +10,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+import logging
+
 from PIL import Image, ImageDraw
 
 from .platforms import Element, Platform, Rect, Window
@@ -72,6 +74,8 @@ def _grab(rect: Rect) -> Image.Image:
         raise ScreenError(f"Could not take a screenshot: {exc}") from exc
 
 
+log = logging.getLogger("click.screen")
+
 SYNONYMS = {"system preferences": "system settings", "settings app": "system settings", "wifi": "wi-fi",
             "wi fi": "wi-fi", "control centre": "control center", "trash can": "trash", "bin": "trash",
             "file explorer": "finder", "files": "finder", "app store": "app store", "browser": "safari"}
@@ -80,7 +84,7 @@ SYNONYMS = {"system preferences": "system settings", "settings app": "system set
 def _norm(t: str) -> str:
     import re
 
-    t = re.sub(r"[…\.\u2026:]+$", "", (t or "").lower()).strip()
+    t = re.sub(r"[…\.\u2026:]+$", "", (t or "").lower().replace("\u2011", "-").replace("\u2010", "-")).strip()
     t = re.sub(r"\s+", " ", t)
     return SYNONYMS.get(t, t)
 
@@ -296,6 +300,17 @@ class ScreenService:
                 if el.name:
                     add(el, -0.03 * i)
         source = "accessibility"
+        # Clicky's built-in Mac map: knows where the Apple menu, Wi-Fi, Control Center, Dock, Trash... are,
+        # even without permissions. A precise Accessibility match still wins.
+        landmark = self._map_hit(query)
+        best = max((sc for sc, _ in scored), default=0.0)
+        if landmark is not None:
+            if best < 0.95:
+                scored.append((0.97, landmark))
+                source = "mac map"
+            else:
+                top = max(scored, key=lambda s: s[0])[1]
+                top.extra.setdefault("note", landmark.extra.get("note", ""))
         if not scored or max(sc for sc, _ in scored) < 0.85:
             for sc, el in self._find_by_text(q):
                 if not any(_overlaps(el.rect, r) for r in own):
@@ -319,6 +334,28 @@ class ScreenService:
         if problems and not found:
             out["permission_problem"] = " ".join(problems)
         return out
+
+    def _map_hit(self, query: str):
+        """Where Clicky's Mac map says `query` is (or None)."""
+        from . import macmap
+
+        if not macmap.match(query):
+            return None
+        try:
+            geo_fn = getattr(self, "geometry_fn", None)
+            if geo_fn is None:
+                if sys.platform != "darwin":
+                    return None
+                own = self.own_rects()
+                front = next((w for w in self.platform.list_windows()
+                              if w.app not in ("Click", "Python") and not any(_overlaps(w.rect, r) for r in own)), None)
+                g = macmap.mac_geometry(front)
+            else:
+                g = geo_fn()
+            return macmap.locate(query, g) if g else None
+        except Exception:  # noqa: BLE001
+            log.exception("mac map failed")
+            return None
 
     def _app_fallback(self, q: str):
         """An app that isn't in the Dock: point at the Apple menu (System Settings) or Spotlight."""

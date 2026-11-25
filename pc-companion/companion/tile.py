@@ -6,16 +6,20 @@
 """
 from __future__ import annotations
 
+import math
 import sys
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPen, QRadialGradient
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizeGrip, QStackedLayout, QVBoxLayout, QWidget,
 )
 
-TILE_W, TILE_H, MARGIN = 420, 620, 4
-GLOW = 12      # space around the glass for its glow
+TILE_W, TILE_H, MARGIN = 500, 700, 0
+GLOW = 52      # room around the flat chat panel for the flowing goo (and its droplets)
+GOO_OFF = 17   # how far the goo reaches past the panel at rest
+GOO_AMP = 13   # how much it ripples
+PANEL_R = 30   # the flat panel's corner radius
 
 
 def _dark() -> bool:
@@ -250,6 +254,57 @@ class SetupView(QWidget):
             self.perm_box.addWidget(row)
 
 
+def _rr_point(r: QRectF, rad: float, u: float):
+    """A point (and the outward direction) at fraction u around a rounded rectangle grown by
+    rad - PANEL_R around r."""
+    grow = rad - PANEL_R
+    x0, y0, x1, y1 = r.left() - grow, r.top() - grow, r.right() + grow, r.bottom() + grow
+    w, h = x1 - x0 - 2 * rad, y1 - y0 - 2 * rad
+    arc = math.pi * rad / 2
+    segs = [("line", w), ("arc", arc), ("line", h), ("arc", arc), ("line", w), ("arc", arc), ("line", h), ("arc", arc)]
+    total = sum(L for _, L in segs)
+    d = (u % 1.0) * total
+    corners = [(x1 - rad, y0 + rad), (x1 - rad, y1 - rad), (x0 + rad, y1 - rad), (x0 + rad, y0 + rad)]
+    for i, (kind, L) in enumerate(segs):
+        if d <= L or i == len(segs) - 1:
+            f = d / L if L else 0
+            side = i // 2
+            if kind == "line":
+                if side == 0:
+                    return QPointF(x0 + rad + f * w, y0), QPointF(0, -1)
+                if side == 1:
+                    return QPointF(x1, y0 + rad + f * h), QPointF(1, 0)
+                if side == 2:
+                    return QPointF(x1 - rad - f * w, y1), QPointF(0, 1)
+                return QPointF(x0, y1 - rad - f * h), QPointF(-1, 0)
+            cx, cy = corners[side]
+            a = -math.pi / 2 + side * math.pi / 2 + f * math.pi / 2
+            n = QPointF(math.cos(a), math.sin(a))
+            return QPointF(cx + rad * n.x(), cy + rad * n.y()), n
+        d -= L
+    return QPointF(x0, y0), QPointF(0, -1)
+
+
+def goo_path(panel: QRectF, panel_r: float, t: float, n: int = 140) -> QPainterPath:
+    """A wavy, flowing outline around the panel: always outside it, never still, never fast."""
+    pts = []
+    for i in range(n):
+        u = i / n
+        pt, nrm = _rr_point(panel, panel_r + GOO_OFF, u)
+        a = 2 * math.pi * u
+        wob = GOO_AMP * (0.5 * math.sin(4 * a + t * 0.8) + 0.3 * math.sin(7 * a - t * 1.1)
+                         + 0.2 * math.sin(11 * a + t * 1.6) + 0.15 * math.sin(2 * a - t * 0.5))
+        wob = max(-GOO_OFF + 4, wob)  # the goo never cuts into the chat
+        pts.append(QPointF(pt.x() + nrm.x() * wob, pt.y() + nrm.y() * wob))
+    path = QPainterPath()
+    mid = lambda a, b: QPointF((a.x() + b.x()) / 2, (a.y() + b.y()) / 2)  # noqa: E731
+    path.moveTo(mid(pts[-1], pts[0]))
+    for i in range(n):
+        path.quadTo(pts[i], mid(pts[i], pts[(i + 1) % n]))
+    path.closeSubpath()
+    return path
+
+
 class Tile(QWidget):
     moved = Signal()
 
@@ -325,82 +380,60 @@ class Tile(QWidget):
             self.update()
 
     def paintEvent(self, _):
-        """A 3D liquid-glass capsule, like the orb stretched into a window:
-        soft outer glow, a thick rim lit from above, a glossy highlight, slowly flowing colour."""
-        import math
-
-        from PySide6.QtGui import QConicalGradient, QLinearGradient, QRadialGradient
-
+        """The chat as a floating ball of goo: a flat, calm panel inside (easy to read), wrapped in
+        slowly flowing liquid in the orb's colours (cyan to blue), with little droplets drifting by."""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         t = self._glow_t
         accent = QColor(self.accent)
         cyan = QColor("#22d3ee")
-        m = GLOW  # room for the outer glow
-        body = QRectF(self.rect()).adjusted(m, m, -m, -m)
-        radius = 28.0
-
-        def rounded(r: QRectF, rad: float) -> QPainterPath:
-            pth = QPainterPath()
-            pth.addRoundedRect(r, rad, rad)
-            return pth
-
-        # 1. outer glow, like the orb's halo
-        for i in range(m, 0, -2):
-            g = QColor(accent)
-            g.setAlpha(int(5 + 2.2 * (m - i)))
-            p.setPen(QPen(g, 2))
+        panel = QRectF(self.rect()).adjusted(GLOW, GLOW, -GLOW, -GLOW)
+        goo = goo_path(panel, PANEL_R, t)
+        # 1. soft glow in space around the goo
+        for width, alpha in ((22, 18), (12, 30)):
+            g = QColor(cyan)
+            g.setAlpha(alpha)
+            p.setPen(QPen(g, width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
             p.setBrush(Qt.NoBrush)
-            p.drawPath(rounded(body.adjusted(-i, -i, i, i), radius + i))
-        # 2. the glass body with drifting liquid light inside
-        shape = rounded(body, radius)
-        p.fillPath(shape, QColor(12, 12, 17, 240))
+            p.drawPath(goo)
+        # 2. the goo itself, coloured like the orb, with its light slowly drifting
+        c = panel.center()
+        drift = QPointF(c.x() + panel.width() * 0.25 * math.cos(t * 0.35), c.y() + panel.height() * 0.25 * math.sin(t * 0.3))
+        body = QRadialGradient(drift, max(panel.width(), panel.height()) * 0.75)
+        body.setColorAt(0.0, cyan)
+        body.setColorAt(0.55, accent)
+        body.setColorAt(1.0, accent.darker(170))
+        p.setPen(Qt.NoPen)
+        p.setBrush(body)
+        p.drawPath(goo)
+        # 3. droplets floating beside it (goo in space)
+        for k, (u0, speed, r0) in enumerate(((0.12, 0.010, 7.5), (0.61, -0.008, 5.5))):
+            u = (u0 + t * speed) % 1.0
+            pt, nrm = _rr_point(panel, PANEL_R + GOO_OFF, u)
+            dist = GOO_AMP + 9 + 5 * math.sin(t * 0.6 + k * 2)
+            dc = QPointF(pt.x() + nrm.x() * dist, pt.y() + nrm.y() * dist)
+            dg = QRadialGradient(dc + QPointF(-r0 * 0.3, -r0 * 0.3), r0 * 1.4)
+            dg.setColorAt(0, cyan)
+            dg.setColorAt(1, accent)
+            p.setBrush(dg)
+            p.drawEllipse(dc, r0 * (1 + 0.08 * math.sin(t * 1.3 + k)), r0 * (1 - 0.08 * math.sin(t * 1.3 + k)))
+        # 4. shine on the goo, like light on the orb
+        inner = QPainterPath()
+        inner.addRoundedRect(panel, PANEL_R, PANEL_R)
         p.save()
-        p.setClipPath(shape)
-        for cx, cy, rad, col, ph in ((0.2, 0.08, 0.8, accent, 0.0), (0.9, 0.98, 0.7, cyan, 2.1)):
-            c = QPointF(body.x() + body.width() * (cx + 0.06 * math.sin(t * 0.5 + ph)),
-                        body.y() + body.height() * (cy + 0.04 * math.cos(t * 0.4 + ph)))
-            g = QRadialGradient(c, body.width() * rad)
-            col = QColor(col)
-            col.setAlpha(52)
-            g.setColorAt(0, col)
-            g.setColorAt(1, QColor(0, 0, 0, 0))
-            p.fillRect(body, g)
+        p.setClipPath(goo.subtracted(inner))
+        shine = QRadialGradient(QPointF(panel.x() + panel.width() * 0.25, panel.y()), panel.width() * 0.55)
+        shine.setColorAt(0, QColor(255, 255, 255, 150))
+        shine.setColorAt(1, QColor(255, 255, 255, 0))
+        p.fillRect(QRectF(self.rect()), shine)
         p.restore()
-        # 3. thick rim: colour flowing around it, lit from the top, shaded at the bottom (3D)
-        rim_w = 7.0
-        rim = body.adjusted(rim_w / 2, rim_w / 2, -rim_w / 2, -rim_w / 2)
-        flow = QConicalGradient(body.center(), (t * 10) % 360)
-        c1, c2 = QColor(accent), QColor(cyan)
-        c1.setAlpha(235)
-        c2.setAlpha(215)
-        flow.setColorAt(0.0, c1)
-        flow.setColorAt(0.5, c2)
-        flow.setColorAt(1.0, c1)
-        p.setPen(QPen(flow, rim_w))
+        # 5. the flat panel inside (2D, calm, easy to read)
+        p.fillPath(inner, QColor(13, 13, 19, 250))
+        edge = QColor(cyan)
+        edge.setAlpha(70)
+        p.setPen(QPen(edge, 1.2))
         p.setBrush(Qt.NoBrush)
-        p.drawPath(rounded(rim, radius - rim_w / 2))
-        light = QLinearGradient(body.topLeft(), body.bottomLeft())
-        light.setColorAt(0.0, QColor(255, 255, 255, 120))
-        light.setColorAt(0.18, QColor(255, 255, 255, 25))
-        light.setColorAt(0.75, QColor(0, 0, 0, 0))
-        light.setColorAt(1.0, QColor(0, 0, 0, 120))
-        p.setPen(QPen(light, rim_w))
-        p.drawPath(rounded(rim, radius - rim_w / 2))
-        # inner edge: a thin bright line, then a soft inner shadow, so the rim looks rounded
-        p.setPen(QPen(QColor(255, 255, 255, 60), 1.0))
-        p.drawPath(rounded(body.adjusted(rim_w, rim_w, -rim_w, -rim_w), radius - rim_w))
-        p.setPen(QPen(QColor(0, 0, 0, 90), 2.0))
-        p.drawPath(rounded(body.adjusted(rim_w + 1.5, rim_w + 1.5, -rim_w - 1.5, -rim_w - 1.5), radius - rim_w - 1.5))
-        # 4. glossy highlight along the top-left, like light on the orb
-        gloss = QRadialGradient(QPointF(body.x() + body.width() * 0.28, body.y() + 6), body.width() * 0.45)
-        gloss.setColorAt(0.0, QColor(255, 255, 255, 150))
-        gloss.setColorAt(1.0, QColor(255, 255, 255, 0))
-        p.save()
-        ring = rounded(body, radius).subtracted(rounded(body.adjusted(rim_w, rim_w, -rim_w, -rim_w), radius - rim_w))
-        p.setClipPath(ring)
-        p.fillRect(QRectF(body.x(), body.y(), body.width(), 40), gloss)
-        p.restore()
+        p.drawPath(inner)
         p.end()
 
     # ---- window behaviour ------------------------------------------------------------------------------

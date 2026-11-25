@@ -350,6 +350,7 @@ class GhostController(QObject):
         self.bubble = ""
 
     def move_to(self, x: float, y: float, label: str):
+        self.last_active = time.time()
         self.docked = False
         self._vanish_after_anim = False
         if self.visible:
@@ -370,6 +371,7 @@ class GhostController(QObject):
         self.highlights.append({"x": x, "y": y, "w": w, "h": h, "label": label, "until": time.time() + 8})
 
     def narrate(self, text: str):
+        self.last_active = time.time()
         self.caption = text
         self.caption_until = time.time() + 6
 
@@ -383,7 +385,11 @@ class GhostController(QObject):
         self.highlights = []
         if not self.visible:
             return
-        if self.home:
+        if self.home and math.hypot(self.x - self.home[0], self.y - self.home[1]) < 40:
+            self.visible = False  # already home: just disappear
+            self.docked = False
+            self._anim = None
+        elif self.home:
             self.move_to(*self.home, "")
             self._vanish_after_anim = True
         else:
@@ -457,7 +463,15 @@ class GhostController(QObject):
                     self._vanish_after_anim = False
                     self.visible = False
                     self.docked = False
+        elif self.visible and time.time() - getattr(self, "last_active", 0) > self.IDLE_HIDE_S \
+                and not self._waiting_for_ok():
+            self.rest()  # safety net: Clicky never stays parked on screen doing nothing
         self.repaint_all()
+
+    IDLE_HIDE_S = 7.0
+
+    def _waiting_for_ok(self) -> bool:
+        return any(isinstance(w, ConfirmPopup) and w.isVisible() for w in QApplication.topLevelWidgets())
 
 
 # --------------------------------------------------------------------------------------------------

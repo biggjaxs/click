@@ -69,6 +69,39 @@ def is_summon(text: str) -> bool:
     return bool(SUMMON.match(text.strip()))
 
 
+# System Settings sections people ask for, by the words they use (key = the section's real name)
+SETTINGS_PANES = {
+    "Wi-Fi": ["wifi", "wi-fi", "wi fi", "wireless", "internet"], "Bluetooth": ["bluetooth", "airpods"],
+    "Network": ["network", "vpn", "ethernet"], "Displays": ["display", "displays", "screen resolution", "monitor",
+                                                             "resolution", "night shift"],
+    "Sound": ["sound", "volume", "audio", "speaker", "speakers", "microphone", "mic"],
+    "Battery": ["battery", "power", "energy", "low power"], "Wallpaper": ["wallpaper", "background", "desktop picture"],
+    "Privacy & Security": ["privacy", "security", "privacy & security", "privacy and security", "permissions"],
+    "Screen Recording": ["screen recording", "screen capture"], "Accessibility": ["accessibility"],
+    "Notifications": ["notifications", "notification", "alerts"], "Software Update": ["software update", "update",
+                                                                                     "updates", "macos update"],
+    "Keyboard": ["keyboard", "shortcuts", "keyboard shortcuts"], "Trackpad": ["trackpad", "touchpad"],
+    "Mouse": ["mouse"], "Appearance": ["appearance", "dark mode", "light mode", "theme"],
+    "Desktop & Dock": ["dock", "desktop & dock", "desktop and dock", "mission control", "hot corners"],
+    "Users & Groups": ["users", "accounts", "users & groups"], "Lock Screen": ["lock screen", "screen saver"],
+    "Touch ID & Password": ["touch id", "password", "login password"], "Storage": ["storage", "disk space"],
+    "Date & Time": ["date", "time", "date & time", "date and time", "clock"], "Focus": ["focus", "do not disturb"],
+    "Screen Time": ["screen time", "parental controls"], "Printers & Scanners": ["printer", "printers", "scanner"],
+    "General": ["general", "about", "about this mac"], "Control Center": ["control center", "menu bar"],
+    "Siri": ["siri", "apple intelligence"], "Apple Account": ["apple id", "apple account", "icloud"],
+    "Brightness": ["brightness"],
+}
+
+
+def settings_pane(words: str) -> str | None:
+    w = words.lower().replace("\u2011", "-").strip(" .")
+    w = re.sub(r"^(?:system|mac|macbook|computer)\s+", "", w)
+    for pane, keys in SETTINGS_PANES.items():
+        if w in keys or w == pane.lower():
+            return "Displays" if pane == "Brightness" else pane
+    return None
+
+
 def parse_task(text: str, now: dt.datetime | None = None) -> dict | None:
     t = re.sub(_LEAD, "", strip_clicky(text.strip()), flags=re.I).rstrip(" .!?")
     if not t:
@@ -94,6 +127,17 @@ def parse_task(text: str, now: dt.datetime | None = None) -> dict | None:
         if q:
             return {"plan": [{"skill": "open_app", "app": "Music"}, {"skill": "play_music", "query": q}],
                     "summary": f"Open Music and play “{q}”"}
+    # --- A part of System Settings: "open Wi-Fi settings", "take me to bluetooth settings" ---------------
+    m = re.match(r"^(?:open|show|go to|take me to|bring up|open up|show me)\s+(?:the\s+|my\s+)?(?P<p>[\w &\-\u2011]+?)\s+"
+                 r"(?:settings|preferences|prefs|options)$", t, re.I) \
+        or re.match(r"^(?:open|show|go to|take me to)\s+(?:system\s+)?settings\s+(?:for|to|on)\s+(?:the\s+|my\s+)?"
+                    r"(?P<p>[\w &\-\u2011]+)$", t, re.I) \
+        or re.match(r"^(?:change|turn on|turn off|connect to|adjust|fix)\s+(?:the\s+|my\s+)?(?P<p>wi-?fi|bluetooth|"
+                    r"brightness|wallpaper|volume|sound|display|screen resolution)(?:\s+.*)?$", t, re.I)
+    if m:
+        pane = settings_pane(m.group("p"))
+        if pane:
+            return {"plan": [{"skill": "open_settings", "pane": pane}], "summary": f"Open {pane} in System Settings"}
     # --- Open an app, then type into it -----------------------------------------------------------------
     m = re.match(rf"^(?:open|launch|start)\s+{_APP}(?:,|\s+and)\s*(?:then\s+)?(?:type|write|enter)\s+(?P<x>.+)$", t, re.I)
     if m:

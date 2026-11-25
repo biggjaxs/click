@@ -147,18 +147,8 @@ class App:
             QTimer.singleShot(500, self._selftest_check)
             return
         self._warm()
-        from . import __version__
-
-        if self.settings.get("welcome_version") != __version__:
-            self._onboard()  # the welcome shows once for each new version (it has a Skip button)
-        elif self.settings.get("onboarded") and self.settings.get("setup_done") and self._models_present():
-            self._normal_launch()
-        elif self.settings.get("onboarded"):
-            self._show_orb()
-            self.tile.show_tile()
-            self._run_setup()
-        else:
-            self._onboard()
+        # The welcome tutorial shows every time Click opens (Skip closes it straight away).
+        self._onboard()
 
     def _own_rects(self):
         """Where Click's own windows are (in screen coordinates), so 'find' never points at them."""
@@ -280,7 +270,11 @@ class App:
         self.onboarding.show()
         self.onboarding.raise_()
         self.onboarding.activateWindow()
-        start()
+        if self.settings.get("setup_done") and self._models_present():
+            setup_done(True, "")  # already set up: nothing to download, Skip works at once
+            self._show_orb()
+        else:
+            start()
 
     def _after_hub_start(self) -> None:
         cert = self.hub.ensure_paired(self.server.identity.cert, self.settings["pc_id"], self.settings["pc_name"],

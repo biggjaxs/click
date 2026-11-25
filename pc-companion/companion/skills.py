@@ -24,6 +24,30 @@ APP_ALIASES = {"settings": "System Settings", "system preferences": "System Sett
                "app store": "App Store", "terminal": "Terminal", "facetime": "FaceTime", "tv": "TV", "podcasts": "Podcasts"}
 
 
+# System Settings sections, opened directly (macOS 13 and later)
+_PANE = "x-apple.systempreferences:"
+SETTINGS_URLS = {
+    "Wi-Fi": "com.apple.wifi-settings-extension", "Bluetooth": "com.apple.BluetoothSettings",
+    "Network": "com.apple.Network-Settings.extension", "Displays": "com.apple.Displays-Settings.extension",
+    "Sound": "com.apple.Sound-Settings.extension", "Battery": "com.apple.Battery-Settings.extension",
+    "Wallpaper": "com.apple.Wallpaper-Settings.extension",
+    "Privacy & Security": "com.apple.settings.PrivacySecurity.extension",
+    "Screen Recording": "com.apple.preference.security?Privacy_ScreenCapture",
+    "Accessibility": "com.apple.preference.security?Privacy_Accessibility",
+    "Notifications": "com.apple.Notifications-Settings.extension",
+    "Software Update": "com.apple.Software-Update-Settings.extension",
+    "Keyboard": "com.apple.Keyboard-Settings.extension", "Trackpad": "com.apple.Trackpad-Settings.extension",
+    "Mouse": "com.apple.Mouse-Settings.extension", "Appearance": "com.apple.Appearance-Settings.extension",
+    "Desktop & Dock": "com.apple.Desktop-Settings.extension", "Users & Groups": "com.apple.Users-Groups-Settings.extension",
+    "Lock Screen": "com.apple.Lock-Screen-Settings.extension", "Touch ID & Password": "com.apple.Touch-ID-Settings.extension",
+    "Storage": "com.apple.settings.Storage", "Date & Time": "com.apple.Date-Time-Settings.extension",
+    "Focus": "com.apple.Focus-Settings.extension", "Screen Time": "com.apple.Screen-Time-Settings.extension",
+    "Printers & Scanners": "com.apple.Print-Scanner-Settings.extension", "General": "com.apple.systempreferences.GeneralSettings",
+    "Control Center": "com.apple.ControlCenter-Settings.extension", "Siri": "com.apple.Siri-Settings.extension",
+    "Apple Account": "com.apple.systempreferences.AppleIDSettings",
+}
+
+
 class SkillError(RuntimeError):
     pass
 
@@ -59,6 +83,8 @@ def describe(step: dict) -> str:
         return f"Make a note: “{step['text'][:60]}”"
     if k == "type_text":
         return f"Type “{step['text'][:60]}”"
+    if k == "open_settings":
+        return f"Open {step['pane']} in System Settings"
     return k or "?"
 
 
@@ -71,7 +97,7 @@ class Skills:
         if not plan or len(plan) > 6:
             raise SkillError("Nothing to do.")
         for step in plan:
-            if step.get("skill") not in ("open_app", "play_music", "new_note", "type_text"):
+            if step.get("skill") not in ("open_app", "play_music", "new_note", "type_text", "open_settings"):
                 raise SkillError(f"Unknown step {step.get('skill')}")
         summary = payload.get("summary") or " then ".join(describe(s) for s in plan)
         # one confirmation for the whole task, next to the orb
@@ -117,6 +143,22 @@ class Skills:
             raise SkillError("Opening apps isn't supported on this computer yet.")
         await asyncio.sleep(1.5)  # give the app a moment to come to the front
         return f"opened {name}"
+
+    async def open_settings(self, step: dict) -> str:
+        pane = step.get("pane") or ""
+        if sys.platform != "darwin":
+            raise SkillError("Opening Settings sections is Mac-only for now.")
+        await self._point("System Settings", f"Opening {pane} settings")
+        url = SETTINGS_URLS.get(pane)
+        cmd = ["open", _PANE + url] if url else ["open", "-a", "System Settings"]
+        r = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True)
+        if r.returncode != 0 and url:
+            await asyncio.to_thread(subprocess.run, ["open", "-a", "System Settings"], capture_output=True)
+            self.app.bridge.narrate.emit(f"Opened System Settings: pick {pane} in the list on the left")
+            return f"opened System Settings (pick {pane} on the left)"
+        await asyncio.sleep(1.2)
+        self.app.bridge.narrate.emit(f"Here's {pane} in System Settings")
+        return f"opened {pane} settings"
 
     async def play_music(self, step: dict) -> str:
         if sys.platform != "darwin":

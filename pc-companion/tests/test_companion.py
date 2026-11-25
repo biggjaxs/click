@@ -176,3 +176,49 @@ def test_skill_descriptions_and_app_names():
     assert app_name("google chrome") == "Google Chrome"
     assert describe({"skill": "play_music", "query": "Levitating"}) == "Play “Levitating” in Music"
     assert _as_text('say "hi"') == 'say \\"hi\\"'
+
+
+def _mac():
+    from companion.macmap import MacGeometry
+    from companion.platforms import Rect
+
+    return MacGeometry(screen=Rect(0, 0, 1440, 900), menu_bar_h=24, dock_side="bottom", dock_thickness=70,
+                       tilesize=48, dock_apps=["Safari", "Messages", "Music", "System Settings"],
+                       dock_middle=["Notes"], dock_others=["Downloads"], window=Rect(200, 100, 800, 600),
+                       window_app="Safari")
+
+
+def test_mac_map_knows_where_things_are():
+    from companion.macmap import locate, match
+
+    g = _mac()
+    assert match("my budget folder") is None and match("the weather") is None  # never hijacks normal things
+    apple = locate("apple menu", g)
+    assert apple.rect.x < 50 and apple.rect.y == 0
+    wifi = locate("where's my wifi icon".replace("where's ", ""), g)
+    assert wifi.rect.x > 1100 and wifi.rect.y == 0 and "Wi" in wifi.extra["note"]
+    assert locate("bluetooth", g).extra["note"].startswith("Bluetooth is in Control Center")
+    finder, trash = locate("finder", g), locate("the trash", g)
+    assert finder.rect.y > 800 and trash.rect.y > 800 and finder.rect.x < trash.rect.x
+    music = locate("system settings", g)  # pinned in the Dock: points there, not at the Apple menu
+    assert music.window_title == "Dock"
+    assert locate("close button", g).rect.x < 230
+    g.dock_apps = []
+    assert locate("system settings", g).window_title == "Menu bar"  # not in the Dock: the Apple menu
+
+
+def test_find_uses_mac_map_without_permissions(monkeypatch):
+    from companion.screen import ScreenService
+
+    class P:  # a Mac where Accessibility shows nothing (permission off)
+        def __getattr__(self, name):
+            return lambda *a, **k: []
+
+        def check_permissions(self):
+            return ["Accessibility is off."]
+
+    svc = ScreenService(P(), {"blocklist": []})
+    svc.geometry_fn = _mac
+    monkeypatch.setattr(svc, "_find_by_text", lambda q: [])
+    out = svc.find_ui_element("trash")
+    assert out["matches"] and out["found_by"] == "mac map"

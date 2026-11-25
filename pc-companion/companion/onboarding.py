@@ -123,8 +123,8 @@ class Onboarding(QWidget):
                         "screen when you ask, point things out with its own cursor, and remember what matters to you.")
         p1.layout().insertWidget(0, Orb(170, accent), 0, Qt.AlignHCenter)
         # 2 cursor
-        p2 = self._page("Click has its own cursor", "When you ask where something is, Click glides its purple "
-                        "cursor over and explains it. It never takes over your mouse, and it always asks before "
+        p2 = self._page("Meet Clicky, Click's own cursor", "When you ask where something is, Clicky glides "
+                        "over and points at it. Say \u201copen Notes with Clicky\u201d and Clicky does it for you. It never takes over your mouse, and it always asks before "
                         "it clicks anything. Press Control + Option + Esc any time to stop everything.")
         demo = _button("Show me", False, accent)
         demo.clicked.connect(self.show_cursor.emit)
@@ -212,6 +212,9 @@ class Onboarding(QWidget):
     def _go(self, i: int):
         i = max(0, min(self.pages - 1, i))
         self.stack.setCurrentIndex(i)
+        if i == 1 and not getattr(self, "_demoed", False):
+            self._demoed = True
+            self.show_cursor.emit()  # Clicky shows itself right away on this page
         if i == 2:
             self._fill_permissions()
         self.dots.setText("  ".join(f"<span style='color:{self.accent if k == i else 'rgba(255,255,255,0.25)'};"

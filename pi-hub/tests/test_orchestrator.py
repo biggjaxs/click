@@ -260,9 +260,8 @@ def test_show_me_where_moves_the_cursor_without_relying_on_the_model(services):
                                            upload_ids=[], incognito_key=None, state=_state()))
     assert ("screen", "find_ui_element", {"query": "Wi-Fi"}) in calls
     assert any(c[:2] == ("cursor", "move") and c[2]["element_id"] == "e7" for c in calls)
-    first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
-    assert first["tools"] is None and "moved your cursor" in first["messages"][-1]["content"]
-    assert out["answer"] == "That's your Wi-Fi menu."
+    assert not [c for c in services.pc_backend.calls if c.get("fmt") != "json"]  # instant: no AI model needed
+    assert "Wi-Fi" in out["answer"] and out["ms"] < 3000
 
 
 def _wire(services, responses):
@@ -331,8 +330,7 @@ def test_mentioning_clicky_makes_it_appear(services):
     summons = [c for c in calls if c[:2] == ("cursor", "summon")]
     assert len(summons) == 4 and all(c[2]["center"] for c in summons)
     assert not any(c[:2] == ("screen", "context") for c in calls)  # no screen grab just to say hi
-    first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
-    assert not first.get("tools")
+    assert not [c for c in services.pc_backend.calls if c.get("fmt") != "json"]  # Clicky answers instantly
 
 
 def test_open_system_settings_with_clicky(services):
@@ -343,3 +341,12 @@ def test_open_system_settings_with_clicky(services):
     assert any(c[:2] == ("cursor", "summon") for c in calls)
     task = next(c for c in calls if c[:2] == ("skills", "run"))
     assert task[2]["plan"] == [{"skill": "open_app", "app": "system settings"}]
+
+
+def test_open_wifi_settings_is_one_instant_task(services):
+    calls = _wire(services, {("skills", "run"): {"status": "done", "steps": []}})
+    out = run(services.orchestrator.handle(send=Recorder(), text="open wifi settings", conversation_id=None,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    task = next(c for c in calls if c[:2] == ("skills", "run"))
+    assert task[2]["plan"] == [{"skill": "open_settings", "pane": "Wi-Fi"}]
+    assert out["answer"].startswith("Done")
