@@ -143,6 +143,12 @@ class Signer:
             _run("security", "list-keychains", "-d", "user", "-s", *before, str(self.keychain))
         try:
             r = _run(*cmd, str(app), timeout=600)
+            if r.returncode:
+                diag = (_run("security", "list-keychains", "-d", "user").stdout.strip() + " || "
+                        + _run("security", "find-identity", "-v", "-p", "codesigning").stdout.strip() + " || "
+                        + _run("security", "find-identity", "-p", "codesigning", str(self.keychain)).stdout.strip())
+                log.warning("signing diagnostics: %s", diag)
+                print("DIAG:", diag)
         finally:
             if str(self.keychain) not in before and before:
                 _run("security", "list-keychains", "-d", "user", "-s", *before)
