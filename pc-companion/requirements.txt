@@ -1,6 +1,7 @@
 # Click Companion (Python 3.12). Licence noted for each.
-PySide6-Essentials>=6.7   # LGPL-3.0 (used unmodified as a library)
-PySide6-WebEngine>=6.12   # LGPL-3.0 (the chat tile; needs macOS 14+)
+# Qt 6.9.x: its Mac builds support macOS 12+. (6.12's Python bindings were built to need macOS 26.)
+PySide6-Essentials==6.9.3 # LGPL-3.0 (used unmodified as a library)
+PySide6-Addons==6.9.3     # LGPL-3.0 (includes the web view used by the chat window)
 httpx>=0.27               # BSD-3
 websockets>=13.0          # BSD-3
 zeroconf>=0.132           # LGPL-2.1 (used unmodified as a library)
