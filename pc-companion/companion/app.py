@@ -34,6 +34,8 @@ class App:
         self.qt = QApplication.instance() or QApplication(sys.argv)
         self.qt.setQuitOnLastWindowClosed(False)
         self.qt.setApplicationName("Click")
+        if _already_running():
+            sys.exit(0)  # the running Click was asked to show itself
         _hide_dock_icon()
         self.settings = Settings()
         self.platform = get_platform()
@@ -61,7 +63,7 @@ class App:
 
         self.bridge.confirmRequest.connect(show_confirm)
         self.bridge.notify.connect(self._show_message)
-        self.bridge.toggleTile.connect(lambda: self.tile and self.tile.toggle())
+        self.bridge.toggleTile.connect(self.toggle_tile)
         self.tray = Tray(self)
         self.selftest = "--selftest" in sys.argv
         self._start_hotkeys()
@@ -69,8 +71,12 @@ class App:
             self.platform.request_permissions()
         self.server.start()
         self.tile = None
+        self.bubble = None
         self.hub = None
+        self.busy = 0
         self._setup_thread = None
+        _listen_for_reopen(self)
+        self.qt.applicationStateChanged.connect(self._activated)
         QTimer.singleShot(0, self._start_click)
 
     # ---- startup: the box part (on this computer or a Pi), then the tile ------------------------------------
@@ -82,9 +88,34 @@ class App:
         return "box" if self.settings["pi_cert_pem"] and not self.settings.get("standalone_paired") else "standalone"
 
     def _start_click(self) -> None:
+        try:
+            self._start_click_inner()
+        except Exception as exc:  # noqa: BLE001 - show the problem instead of silently not opening
+            log.exception("Click failed to start")
+            if self.tile:
+                self.tile.setup.title.setText("Click couldn't start")
+                self.tile.setup.sub.setText(f"{exc}\n\nDetails: ~/Library/Application Support/ClickCompanion/companion.log")
+                self.tile.show_setup()
+                self.tile.show_tile()
+            if self.bubble:
+                self.bubble.set_state("error")
+
+    def _start_click_inner(self) -> None:
+        from .bubble import LiquidBubble
         from .config import config_dir
         from .tile import Tile
 
+        self.bubble = LiquidBubble(self.settings["cursor"]["color"])
+        self.bubble.clicked.connect(self.toggle_tile)
+        self.bubble.moved.connect(self._tile_moved)
+        self.bubble.set_state("starting")
+        if not self.selftest:
+            self.bubble.show()
+            self.platform.configure_overlay(self.bubble)  # float above every app and Space
+        url = f"http://{self.settings['pi_host']}"
+        self.tile = Tile(url, str(config_dir() / "web"), self.settings["cursor"]["color"])
+        self.tile.place_under(self.bubble)
+        self._tile_moved()
         if self.mode == "standalone":
             from .standalone import EmbeddedHub
 
@@ -95,20 +126,47 @@ class App:
             if cert:
                 self.settings.set("pi_cert_pem", cert)
                 self.server.restart_tls()
-            url = self.hub.url
-        else:
-            url = f"http://{self.settings['pi_host']}"
-        self.tile = Tile(url, str(config_dir() / "web"), self.settings["cursor"]["color"])
-        self.tile.moved.connect(self._tile_moved)
+            self.tile.url = self.hub.url
+        self._watchdog = QTimer()
+        self._watchdog.timeout.connect(self._watch)
+        self._watchdog.start(1000)
         if self.selftest:
             QTimer.singleShot(500, self._selftest_check)
             return
-        self.tile.show_tile()
         if self.settings.get("setup_done") and self._models_present():
             self.tile.show_chat()
             self.tile.header.set_status("Ready", "#16a34a")
         else:
+            self.tile.show_tile()
             self._run_setup()
+
+    def toggle_tile(self) -> None:
+        if not self.tile:
+            return
+        if self.tile.isVisible():
+            self.tile.hide_tile()
+        else:
+            self.tile.place_under(self.bubble)
+            self.tile.show_tile()
+            if self.tile.stack.currentWidget() is not self.tile.web and self.settings.get("setup_done"):
+                self.tile.show_chat()
+
+    def _watch(self) -> None:
+        """Every second: keep the chat part alive and keep the bubble's mood in sync."""
+        if self.hub and not self.hub.alive():
+            self.bubble.set_state("error")
+            self.hub.restart()
+            return
+        if self.paused:
+            self.bubble.set_state("idle")
+        elif self.ghost.flags.get("control"):
+            self.bubble.set_state("acting")
+        elif self.busy > 0:
+            self.bubble.set_state("thinking")
+        elif not self.server.pi_connected:
+            self.bubble.set_state("starting")
+        else:
+            self.bubble.set_state("idle")
 
     def _models_present(self) -> bool:
         import httpx
@@ -150,6 +208,14 @@ class App:
         models = list(dict.fromkeys([self.models["chat"], self.models["vision"]]))
         self._setup_thread = run_setup(view, self.settings["ollama_url"], models, done)
 
+    def _activated(self, state) -> None:
+        """Opening Click from Applications/Spotlight while it's running brings it back."""
+        from PySide6.QtCore import Qt as _Qt
+
+        if state == _Qt.ApplicationActive and self.bubble and not self.selftest:
+            self.bubble.show()
+            self.bubble.raise_()
+
     def _on_continue(self, fn) -> None:
         view = self.tile.setup
         if getattr(self, "_continue_fn", None):
@@ -158,15 +224,19 @@ class App:
         view.continue_clicked.connect(fn)
 
     def _finish_setup(self) -> None:
+        self.settings.set("setup_done", True)
         self.tile.show_chat()
         self.tile.header.set_status("Ready", "#16a34a")
         QTimer.singleShot(1200, self.ghost.demo)  # show the cursor once so you know what to look for
 
     def _tile_moved(self) -> None:
         """The cursor appears from the tile, so its movement is easy to follow."""
-        if not self.tile:
+        if not self.bubble:
             return
-        pos = self.tile.bottom_left_global()
+        g0 = self.bubble.frameGeometry()
+        from PySide6.QtCore import QPoint
+
+        pos = QPoint(g0.center().x(), g0.center().y())
         for o in self.ghost.overlays:
             g = o.smap.screen.geometry()
             if g.contains(pos):
@@ -432,6 +502,43 @@ class App:
 
     def run(self) -> int:
         return self.qt.exec()
+
+
+_INSTANCE = "app.click.assistant.instance"
+
+
+def _already_running() -> bool:
+    """If Click is already running, ask it to show its chat and return True."""
+    from PySide6.QtNetwork import QLocalSocket
+
+    sock = QLocalSocket()
+    sock.connectToServer(_INSTANCE)
+    if sock.waitForConnected(300):
+        sock.write(b"show")
+        sock.waitForBytesWritten(300)
+        sock.disconnectFromServer()
+        return True
+    return False
+
+
+def _listen_for_reopen(app) -> None:
+    from PySide6.QtNetwork import QLocalServer
+
+    QLocalServer.removeServer(_INSTANCE)  # clears a stale one left by a crash
+    server = QLocalServer()
+    server.listen(_INSTANCE)
+
+    def on_conn():
+        conn = server.nextPendingConnection()
+        if conn:
+            conn.close()
+        if app.bubble:
+            app.bubble.show()
+        if app.tile and not app.tile.isVisible():
+            app.toggle_tile()
+
+    server.newConnection.connect(on_conn)
+    app._instance_server = server
 
 
 def _hide_dock_icon() -> None:

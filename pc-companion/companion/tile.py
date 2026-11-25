@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizeGrip, QStackedLayout, QVBoxLayout, QWidget,
@@ -93,9 +93,9 @@ class Header(QWidget):
         self.browser = IconButton("open", "Open in browser")
         self.browser.clicked.connect(tile.open_in_browser)
         self.minimize = IconButton("min", "Hide (Cmd/Ctrl+Shift+Space brings it back)")
-        self.minimize.clicked.connect(tile.hide)
+        self.minimize.clicked.connect(tile.hide_tile)
         self.close_btn = IconButton("close", "Close (Click keeps running in the menu bar)")
-        self.close_btn.clicked.connect(tile.hide)
+        self.close_btn.clicked.connect(tile.hide_tile)
         for b in (self.pin, self.browser, self.minimize, self.close_btn):
             lay.addWidget(b)
 
@@ -275,7 +275,10 @@ class Tile(QWidget):
         self.web = QWebEngineView()
         self.web.setPage(Page(profile, self.web))
         self.web.page().setBackgroundColor(QColor(bg))
+        self.web.loadFinished.connect(self._loaded)
         self.stack.addWidget(self.web)
+        self._tries = 0
+        self._want_chat = False
         grip_row = QHBoxLayout()
         grip_row.setContentsMargins(0, 0, 2, 2)
         grip_row.addStretch()
@@ -291,14 +294,39 @@ class Tile(QWidget):
 
     def toggle(self):
         if self.isVisible():
-            self.hide()
+            self.hide_tile()
         else:
             self.show_tile()
 
+    def _fade(self, start: float, end: float, after=None):
+        self._anim = QPropertyAnimation(self, b"windowOpacity", self)
+        self._anim.setDuration(180)
+        self._anim.setStartValue(start)
+        self._anim.setEndValue(end)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        if after:
+            self._anim.finished.connect(after)
+        self._anim.start()
+
+    def hide_tile(self):
+        self._fade(1.0, 0.0, lambda: (self.hide(), self.setWindowOpacity(1.0)))
+
+    def place_under(self, bubble):
+        """Open just below the bubble, kept on screen."""
+        geo = (bubble.screen() or QApplication.primaryScreen()).availableGeometry()
+        b = bubble.frameGeometry()
+        x = min(max(geo.left() + 8, b.right() - self.width() + 4), geo.right() - self.width() - 8)
+        y = b.bottom() + 4
+        if y + self.height() > geo.bottom() - 8:
+            y = max(geo.top() + 8, b.top() - self.height() - 4)
+        self.move(x, y)
+
     def show_tile(self):
+        self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
         self.activateWindow()
+        self._fade(0.0, 1.0)
         if sys.platform == "darwin":
             _mac_round_and_float(self, self.pinned)
 
@@ -313,10 +341,34 @@ class Tile(QWidget):
         QDesktopServices.openUrl(QUrl(self.url))
 
     def show_chat(self, url: str | None = None):
+        """Load the chat. Until it answers, show "Starting Click…" and keep retrying (never an error page)."""
         if url:
             self.url = url
+        self._want_chat = True
+        self._tries = 0
+        if self.stack.currentWidget() is not self.web:
+            self.setup.title.setText("Starting Click…")
+            self.setup.sub.setText("Getting everything ready. This takes a few seconds on the first start.")
+            self.setup.set_progress(None, "")
+            self.setup.cont.hide()
+        self._load()
+
+    def _load(self):
         self.web.setUrl(QUrl(self.url + ("&" if "?" in self.url else "?") + "tile=1"))
-        self.stack.setCurrentWidget(self.web)
+
+    def _loaded(self, ok: bool):
+        if not self._want_chat:
+            return
+        if ok:
+            self.stack.setCurrentWidget(self.web)
+            return
+        self._tries += 1
+        self.stack.setCurrentWidget(self.setup)
+        if self._tries == 40:  # about a minute: say so plainly, but keep trying
+            self.setup.title.setText("Click is taking longer than usual")
+            self.setup.sub.setText("Still trying. If this doesn't clear up, quit Click from the menu bar icon and "
+                                   "open it again. Details are in ~/Library/Application Support/ClickCompanion/companion.log")
+        QTimer.singleShot(1500, self._load)
 
     def show_setup(self):
         self.stack.setCurrentWidget(self.setup)

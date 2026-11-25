@@ -206,7 +206,11 @@ class CompanionServer:
             if key == ("inference", "chat"):
                 async def emit(chunk):
                     await self.send(reply(msg, chunk, type="stream_chunk"))
-                await self.send(reply(msg, await app.inference.chat(msg["payload"], emit)))
+                app.busy = getattr(app, "busy", 0) + 1  # the bubble swirls while Click is thinking
+                try:
+                    await self.send(reply(msg, await app.inference.chat(msg["payload"], emit)))
+                finally:
+                    app.busy -= 1
                 return
             if key == ("image", "generate"):
                 await self._image(msg)

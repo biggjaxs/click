@@ -9,7 +9,8 @@ from typing import Awaitable, Callable
 import httpx
 
 
-KEEP_ALIVE = "60m"  # keep the model in memory between questions (reloading takes seconds)
+KEEP_ALIVE = "10m"  # keep the model loaded between questions, but free the RAM after 10 idle minutes
+THREADS = max(2, (__import__("os").cpu_count() or 4) - 2)  # leave cores free so the computer never bogs down
 
 
 class InferenceError(RuntimeError):
@@ -73,7 +74,7 @@ class Inference:
     async def chat(self, payload: dict, emit: Callable[[dict], Awaitable[None]]) -> dict:
         model = self.models["vision"] if payload.get("role") == "vision" else self.models["chat"]
         body = {"model": model, "messages": payload.get("messages", []), "stream": True, "keep_alive": KEEP_ALIVE,
-                "options": {"num_ctx": self.num_ctx, **(payload.get("options") or {})}}
+                "options": {"num_ctx": self.num_ctx, "num_thread": THREADS, **(payload.get("options") or {})}}
         if payload.get("tools"):
             body["tools"] = payload["tools"]
         if payload.get("format"):

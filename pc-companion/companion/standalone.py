@@ -72,19 +72,39 @@ class EmbeddedHub:
         except ImportError:
             log.warning("SQLCipher not available; memory is stored unencrypted (development build)")
             os.environ["CLICK_ALLOW_UNENCRYPTED"] = "1"
-        import uvicorn
-
         from app.main import app  # noqa: E402 - the hub package, found via sys.path above
 
-        config = uvicorn.Config(app, host="127.0.0.1", port=PORT, log_level="warning", proxy_headers=False)
+        self._app = app
+        self._serve()
+
+    def _serve(self) -> None:
+        import uvicorn
+
+        # log_config=None: hub errors go to Click's own log file instead of a hidden console
+        config = uvicorn.Config(self._app, host="127.0.0.1", port=PORT, log_level="info", log_config=None,
+                                proxy_headers=False)
         self.server = uvicorn.Server(config)
-        self.thread = threading.Thread(target=self.server.run, name="click-hub", daemon=True)
+
+        def run():
+            try:
+                self.server.run()
+            except BaseException:  # noqa: BLE001
+                log.exception("Click's chat part stopped")
+
+        self.thread = threading.Thread(target=run, name="click-hub", daemon=True)
         self.thread.start()
-        for _ in range(100):
-            if self.server.started:
+        for _ in range(600):  # slow Macs (first launch is scanned by macOS) can take a while
+            if self.server.started or not self.thread.is_alive():
                 break
             time.sleep(0.05)
-        log.info("Embedded Click hub running at %s", self.url)
+        log.info("Embedded Click hub %s at %s", "running" if self.server.started else "NOT running", self.url)
+
+    def alive(self) -> bool:
+        return bool(self.thread and self.thread.is_alive())
+
+    def restart(self) -> None:
+        log.warning("Restarting Click's chat part")
+        self._serve()
 
     def ensure_paired(self, pc_cert: str, pc_id: str, pc_name: str, port: int) -> str | None:
         """Pair the embedded hub with this computer's Companion. Returns the hub certificate to trust."""

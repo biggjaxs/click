@@ -148,7 +148,7 @@ class SetupWorker(QObject):
             self.step.emit("warm", "Getting ready", "active")
             self.progress.emit(None, "Loading the model into memory…")
             try:
-                httpx.post(f"{self.url}/api/generate", json={"model": self.models[0], "keep_alive": "60m"}, timeout=300)
+                httpx.post(f"{self.url}/api/generate", json={"model": self.models[0], "keep_alive": "10m"}, timeout=300)
             except Exception:  # noqa: BLE001
                 pass
             self.step.emit("warm", "Getting ready", "done")

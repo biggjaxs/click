@@ -16,11 +16,11 @@ Status: **Built** = in the app now, **Next** = planned soon, **Later** = good id
 - **Later: nothing left on the computer.** The model file could be stored on the box and copied to
   the computer each time it's plugged in, then deleted when unplugged. Cost: a 1–2 minute wait
   each time you plug in (USB on the Pi 5 copies roughly 3 GB in about 1–2 minutes).
-- **Next: never overload.**
-  - Pick a model that leaves room for the computer's own work (built: chosen by RAM tier).
-  - Unload the model after N minutes idle (setting; the next question then waits 5–20 s).
-  - Cap how many processor cores Click may use.
-  - Show a "Click is using X GB" indicator.
+- **Never overload.**
+  - **Built:** a model that leaves room for the computer's own work (chosen by RAM tier).
+  - **Built:** the model is freed from RAM after 10 idle minutes.
+  - **Built:** Click never uses all processor cores (it leaves 2 free).
+  - **Next:** a "Click is using X GB" indicator.
 
 ## 2. Start working while the user is still typing
 
@@ -128,3 +128,13 @@ every new version arrives by itself.
   (SD cards wear out).
 - **Computer:** 16 GB RAM is ideal and 8 GB works (see section 5). Mac: macOS 14+, Apple Silicon
   recommended. Images need Apple Silicon or an NVIDIA GPU.
+
+## Built in version 1.2
+- **Floating liquid bubble** in the top-right. Click it to open or close the chat. It swirls while
+  thinking and turns red while using the mouse.
+- **Reliable start:** "Starting Click…" with automatic retries instead of an error page. The chat
+  part restarts itself if it stops.
+- **Reopening works:** opening Click while it's running brings it back. Start-up errors are shown
+  in plain words.
+- **Smoother UI motion:** messages glide in and the active step shimmers.
+- **Bubble ideas for later:** react to voice volume; change colour by mood; snap to screen edges.
