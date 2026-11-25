@@ -174,3 +174,29 @@ every new version arrives by itself.
    Optionally delete the model file too (re-copied from the box next time).
 - **Not avoidable:** each computer needs the Click app once (it's what sees the screen and moves
   the cursor). The HID mouse/keyboard alternative would be blind.
+
+### Portable box: the exact plug-in experience we're aiming for
+1. Plug the box into any computer (one USB-C cable: power + data).
+2. **First time on that computer only:** a drive called "Click" appears; double-click "Install
+   Click". This is the only manual step; macOS and Windows block anything from auto-installing
+   from USB (anti-virus rule, no way around it).
+3. The orb appears at once (top-right) with a progress ring while it sets up in the background.
+   The engine and the right-sized brain copy **from the box's storage over the cable** (no
+   internet; ~1-2 min for a 2-3 GB brain at USB 2 speeds). Memories, chats, settings and images
+   already live on the box, so nothing else needs to move.
+4. The computer asks once for Screen Recording + Accessibility (OS rule: each computer approves
+   once). Click guides you.
+5. Your same Click is ready: same memory, same personality.
+- **Next times on that computer:** plug in and the orb appears automatically (Click auto-starts
+  when it detects the box).
+- **Unplug:** the orb shows "Box unplugged"; personal data is cleared from that computer.
+
+**Box storage (1 TB NVMe SSD on a Pi 5 M.2 HAT, ~$60-90):**
+- memories, chats, images
+- Click installers for Mac (Intel + Apple Silicon) and Windows
+- several brain sizes (the box picks per computer: small for 8 GB laptops, bigger for desktops)
+- engine binaries and image models
+
+To build this: the built-in engine (so everything can come from the box), USB gadget mode with a
+storage drive plus a network link, an "install from box" bootstrap, a model-serving endpoint on the
+Pi, auto-start on box detection, and wipe-on-unplug.
