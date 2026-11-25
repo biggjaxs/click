@@ -856,7 +856,6 @@ def _finish_install() -> None:
     make a stamped copy, swap it in after Click quits, and reopen. Takes a few seconds, once per update."""
     import os
     import subprocess
-    import time as _t
 
     me = _bundle_path()
     if not me or not str(me).startswith("/Applications/"):
