@@ -18,7 +18,7 @@ import time
 import uuid
 
 from .extract import is_image
-from .intents import SCREENISH, parse_task, point_target
+from .intents import SCREENISH, is_summon, mentions_clicky, parse_task, point_target, strip_clicky
 from .llm import BackendUnavailable
 from .memory import estimate_tokens
 from .pc_link import PcError
@@ -169,7 +169,8 @@ class Orchestrator:
         describing it. Typically this is the biggest speed-up for "what's on my screen?".
         """
         deps = self.deps
-        if not (deps.link.connected and deps.permissions.enabled("screen_reading") and SCREEN_INTENT.search(text)):
+        if not (deps.link.connected and deps.permissions.enabled("screen_reading") and SCREEN_INTENT.search(text)
+                and not is_summon(text)):
             return None
         caps = deps.link.capabilities
         vision = bool(caps.get("vision_in_chat")) and not caps.get("cpu_only")
@@ -285,7 +286,11 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.exception("recall failed")
 
-        point_note = await self._direct_task(text, send) if backend.source == "pc" else None
+        point_note = None
+        if backend.source == "pc" and mentions_clicky(text):
+            point_note = await self._summon_clicky(text, send)
+        if point_note is None:
+            point_note = await self._direct_task(text, send) if backend.source == "pc" else None
         if point_note is None and backend.source == "pc":
             point_note = await self._direct_point(text, send)
         if point_note:
@@ -317,6 +322,27 @@ class Orchestrator:
                     "ms": total_ms, "first_ms": tool_log.get("first_ms")})
         return {"answer": answer, "source": source, "model": model, "ms": total_ms}
 
+    async def _summon_clicky(self, text: str, send) -> str | None:
+        """Clicky (Click's cursor) appears whenever it's mentioned. 'Show me Clicky' / 'hey Clicky' brings it
+        to the middle of the screen. Returns a note only for a pure summon (otherwise the request goes on)."""
+        deps = self.deps
+        if not deps.permissions.enabled("cursor"):
+            await send({"type": "notice", "text": "Clicky (the cursor) is turned off in Permissions."})
+            return None
+        pure = is_summon(text)
+        try:
+            await deps.link.request("cursor", "summon", {"label": "Hi! I'm Clicky." if pure else "Clicky here",
+                                                         "center": pure}, timeout=15)
+        except PcError as exc:
+            await send({"type": "notice", "text": f"Clicky couldn't appear: {exc}"})
+            return None
+        if pure:
+            await send({"type": "tool", "name": "ghost_move", "status": "done"})
+            return ("(The user called Clicky, your on-screen cursor, and it just appeared in the middle of their "
+                    "screen. Say hi as Clicky in one short sentence and say what you can do (point at things, open "
+                    "apps, play music, write notes). Don't call any tools.)")
+        return None
+
     async def _direct_task(self, text: str, send) -> str | None:
         """'Open Notes and type today's date', 'play X in Music', 'open Safari': run it as a skill task
         (one OK from the user, Click's cursor shows each step). Returns a note for the model, or None."""
@@ -346,7 +372,8 @@ class Orchestrator:
         'open', click it after the user's OK). Reliable and fast; doesn't depend on a small model
         choosing tools. Returns a note for the model, or None if this isn't such a request."""
         deps = self.deps
-        m_open = OPEN_RE.match(text.strip())
+        plain = strip_clicky(text.strip())
+        m_open = OPEN_RE.match(plain)
         target = m_open.group("t").strip(" ?.!'\"") if m_open else point_target(text)
         if not (target and deps.link.connected and deps.permissions.enabled("cursor")
                 and deps.permissions.enabled("screen_reading")):
@@ -366,6 +393,8 @@ class Orchestrator:
             if not m_open and not SCREENISH.search(text):
                 return None  # e.g. "where is the weather today?" - a normal question, answer it normally
             hint = found.get("permission_problem") or ""
+            if hint:
+                await send({"type": "notice", "text": "Clicky can't see your screen's buttons yet. " + hint})
             return (f"(You looked for '{target}' on the user's screen and couldn't find it. {hint} Say so in one "
                     "sentence and say where it usually is.)")
         await send({"type": "tool", "name": "find_ui_element", "status": "done"})

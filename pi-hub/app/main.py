@@ -43,7 +43,7 @@ DEFAULT_SETTINGS = {
     "font_size": "medium",        # small | medium | large
     "cursor_color": "#6d5dfc",
     "cursor_style": "arrow",      # arrow | dot | ring
-    "cursor_label": "Click",
+    "cursor_label": "Clicky",
     "screenshot_history": False,
     "watch_interval_s": 30,
 }

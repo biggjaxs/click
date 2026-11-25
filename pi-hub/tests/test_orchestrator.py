@@ -320,3 +320,26 @@ def test_general_where_question_is_answered_normally(services):
                                      upload_ids=[], incognito_key=None, state=_state()))
     first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
     assert "couldn't find" not in first["messages"][-1]["content"]
+
+
+def test_mentioning_clicky_makes_it_appear(services):
+    calls = _wire(services, {("cursor", "summon"): {"ok": True}, ("screen", "context"): {"windows": []}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Hi, I'm Clicky!"}]])
+    for text in ("show me clicky", "where is clicky?", "hey clicky", "clicky come here"):
+        run(services.orchestrator.handle(send=Recorder(), text=text, conversation_id=None, upload_ids=[],
+                                         incognito_key=None, state=_state()))
+    summons = [c for c in calls if c[:2] == ("cursor", "summon")]
+    assert len(summons) == 4 and all(c[2]["center"] for c in summons)
+    assert not any(c[:2] == ("screen", "context") for c in calls)  # no screen grab just to say hi
+    first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
+    assert not first.get("tools")
+
+
+def test_open_system_settings_with_clicky(services):
+    calls = _wire(services, {("cursor", "summon"): {"ok": True}, ("skills", "run"): {"status": "done", "steps": []}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Opened."}]])
+    run(services.orchestrator.handle(send=Recorder(), text="open system settings with clicky", conversation_id=None,
+                                     upload_ids=[], incognito_key=None, state=_state()))
+    assert any(c[:2] == ("cursor", "summon") for c in calls)
+    task = next(c for c in calls if c[:2] == ("skills", "run"))
+    assert task[2]["plan"] == [{"skill": "open_app", "app": "system settings"}]

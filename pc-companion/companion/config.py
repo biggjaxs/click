@@ -63,7 +63,7 @@ DEFAULTS = {
     "kill_hotkey": "<ctrl>+<alt>+<esc>",
     "models": {"chat": None, "vision": None},   # None = pick automatically from the hardware tier
     "image": {"enabled": None, "draft_model": None, "quality_model": None, "safety_filter": True},
-    "cursor": {"color": "#6d5dfc", "style": "arrow", "label": "Click"},
+    "cursor": {"color": "#6d5dfc", "style": "arrow", "label": "Clicky"},
     "ollama_url": "http://127.0.0.1:11434",
     "think": False,
 }

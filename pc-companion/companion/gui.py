@@ -85,6 +85,7 @@ class Bridge(QObject):
     narrate = Signal(str)               # caption explaining what Click is doing right now
     toggleTile = Signal()
     ghostRest = Signal()
+    ghostSummon = Signal(str, bool)
     styleChanged = Signal()
     statusChanged = Signal()
     notify = Signal(str)
@@ -394,6 +395,28 @@ class GhostController(QObject):
         else:
             self.flags[name] = on
 
+    def primary_center(self) -> tuple[float, float]:
+        m = next((o.smap for o in self.overlays if o.smap.screen == QApplication.primaryScreen()),
+                 self.overlays[0].smap if self.overlays else None)
+        return (m.left + m.width / 2, m.top + m.height / 2) if m else (400.0, 300.0)
+
+    def summon(self, label: str, center: bool = True):
+        """Clicky appears: glides out from the orb to the middle of the screen (or just beside the orb)."""
+        if center:
+            x, y = self.primary_center()
+        else:
+            hx, hy = self.home or self.primary_center()
+            x, y = hx - 140, hy + 110
+        self.move_to(x, y, label)
+
+    def hello(self):
+        """A short 'hi' every time Click starts, so you always know Clicky is there."""
+        if not self.overlays:
+            return
+        hx, hy = self.home or self.primary_center()
+        QTimer.singleShot(0, lambda: self.move_to(hx - 220, hy + 160, "Hi, I'm Clicky! Ask me where things are."))
+        QTimer.singleShot(3200, self.rest)
+
     def demo(self):
         """"Show me Click's cursor": a short tour so you can check it works, without the AI."""
         mons = [o.smap for o in self.overlays]
@@ -460,7 +483,7 @@ class ConfirmPopup(QWidget):
         card = QWidget(self)
         card.setObjectName("card")
         lay = QVBoxLayout(card)
-        name = controller.style.get("label") or "Click"
+        name = controller.style.get("label") or "Clicky"
         title = QLabel(f"{name} wants to: {req.title}")
         title.setObjectName("title")
         title.setWordWrap(True)
@@ -712,9 +735,15 @@ class Tray(QObject):
         show = QAction("Show Click")
         show.triggered.connect(lambda: app_ctl.tile and app_ctl.tile.show_tile())
         menu.addAction(show)
-        demo = QAction("Show me Click's cursor")
+        demo = QAction("Show me Clicky (tutorial)")
         demo.triggered.connect(app_ctl.ghost.demo)
         menu.addAction(demo)
+        check = QAction("Check Clicky…")
+        check.triggered.connect(app_ctl.check_clicky)
+        menu.addAction(check)
+        welcome = QAction("Show the welcome again")
+        welcome.triggered.connect(lambda: (app_ctl.settings.set("welcome_version", ""), app_ctl._onboard()))
+        menu.addAction(welcome)
         menu.addSeparator()
         self.pause_action = QAction("Pause everything")
         self.pause_action.triggered.connect(app_ctl.toggle_pause)

@@ -166,6 +166,10 @@ _GROUPS = {
 
 def select_tools(deps, text: str) -> list[dict]:
     """The tools this message plausibly needs (often none)."""
+    from .intents import is_summon
+
+    if is_summon(text or ""):
+        return []  # "show me Clicky": Clicky already appeared; nothing to look up
     wanted: set[str] = set()
     for group, rx in _WANT.items():
         if rx.search(text or ""):

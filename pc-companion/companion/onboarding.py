@@ -103,6 +103,13 @@ class Onboarding(QWidget):
         self.dots = QLabel()
         nav.addWidget(self.dots)
         nav.addStretch()
+        self.skip = QPushButton("Skip")
+        self.skip.setCursor(Qt.PointingHandCursor)
+        self.skip.setFlat(True)
+        self.skip.setStyleSheet("QPushButton { color: rgba(244,244,245,0.55); border: none; font-size: 13px; }"
+                                "QPushButton:hover { color: #fff; }")
+        self.skip.clicked.connect(self._skip)
+        nav.addWidget(self.skip)
         self.back = _button("Back", False, accent)
         self.next = _button("Get started", True, accent)
         self.back.clicked.connect(lambda: self._go(self.stack.currentIndex() - 1))
@@ -217,6 +224,13 @@ class Onboarding(QWidget):
         labels = {0: "Get started", 3: "Continue", 4: "Start using Click"}
         self.next.setText(labels.get(i, "Next"))
         self.next.setEnabled(not (i == 3 and not self.setup_done))
+
+    def _skip(self):
+        if self.setup_done:
+            self.close()
+            self.finished.emit()
+        else:
+            self._go(3)  # can't skip the download itself: jump to it
 
     def _next(self):
         i = self.stack.currentIndex()

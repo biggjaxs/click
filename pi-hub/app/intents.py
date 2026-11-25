@@ -41,8 +41,36 @@ def _clean_song(q: str) -> str:
     return q.strip().strip('"“”.!?').strip()
 
 
+# ---- "Clicky" (Click's own cursor) --------------------------------------------------------------------
+_CLICKY_WORDS = [
+    r"\b(?:using|with|via|through|by)\s+(?:my\s+|the\s+|your\s+)?(?:clicky|(?:the\s+)?(?:ai\s+|purple\s+)?cursor)\b",
+    r"^(?:hey|hi|ok|okay|yo)?,?\s*clicky[,:!]?\s+",
+    r"\b(?:use|have|let|get)\s+(?:clicky|your cursor|the cursor)\s+(?:to\s+)?",
+    r"\bclicky,?\s+(?:please\s+|can you\s+|could you\s+)?(?=open|show|where|point|find|play|type|make|write|click)",
+]
+SUMMON = re.compile(r"^(?:hey|hi|hello|yo|ok|okay)?[,!\s]*(?:show me |where(?:'s| is| are) |find |bring (?:out|up) |"
+                    r"come (?:here|out|back)[,!\s]*)?(?:the\s+|my\s+|your\s+)?clicky(?:\s+(?:come (?:here|out|back)|"
+                    r"appear|show yourself|are you there|wake up))?[\s?!.]*$", re.I)
+
+
+def mentions_clicky(text: str) -> bool:
+    return bool(re.search(r"\bclicky\b", text, re.I))
+
+
+def strip_clicky(text: str) -> str:
+    """'Open System Settings with Clicky' -> 'Open System Settings'."""
+    t = text
+    for pat in _CLICKY_WORDS:
+        t = re.sub(pat, " ", t, flags=re.I)
+    return re.sub(r"\s{2,}", " ", t).strip(" ,")
+
+
+def is_summon(text: str) -> bool:
+    return bool(SUMMON.match(text.strip()))
+
+
 def parse_task(text: str, now: dt.datetime | None = None) -> dict | None:
-    t = re.sub(_LEAD, "", text.strip(), flags=re.I).rstrip(" .!?")
+    t = re.sub(_LEAD, "", strip_clicky(text.strip()), flags=re.I).rstrip(" .!?")
     if not t:
         return None
     # --- Notes ---------------------------------------------------------------------------------
@@ -100,7 +128,9 @@ SCREENISH = re.compile(r"\b(screen|desktop|dock|menu ?bar|button|icon|folder|fil
 
 
 def point_target(text: str) -> str | None:
-    m = _POINT.match(text.strip())
+    if is_summon(text):
+        return None
+    m = _POINT.match(strip_clicky(text.strip()))
     if not m:
         return None
     t = m.group("t").strip(" ?.!'\"")

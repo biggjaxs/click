@@ -182,7 +182,10 @@ class QuickAsk(QWidget):
 
     def _send(self):
         text = self.input.text().strip()
-        if not text or self.busy:
+        if not text:
+            return
+        if self.busy:
+            self.status.setText("Still answering the last question… press Enter again in a moment.")
             return
         if not self.link.send({"type": "send", "text": text, "conversation_id": self.conversation_id, "uploads": []}):
             self.status.setText("Not connected yet. Try again in a moment.")

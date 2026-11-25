@@ -68,6 +68,7 @@ class App:
         self.bridge.confirmRequest.connect(show_confirm)
         self.bridge.notify.connect(self._show_message)
         self.bridge.toggleTile.connect(lambda: self.toggle_ask() if getattr(self, "ask", None) else self.toggle_tile())
+        self.bridge.ghostSummon.connect(self.ghost.summon)
         self.tray = Tray(self)
         self.selftest = "--selftest" in sys.argv
         self._start_hotkeys()
@@ -146,7 +147,11 @@ class App:
             QTimer.singleShot(500, self._selftest_check)
             return
         self._warm()
-        if self.settings.get("onboarded") and self.settings.get("setup_done") and self._models_present():
+        from . import __version__
+
+        if self.settings.get("welcome_version") != __version__:
+            self._onboard()  # the welcome shows once for each new version (it has a Skip button)
+        elif self.settings.get("onboarded") and self.settings.get("setup_done") and self._models_present():
             self._normal_launch()
         elif self.settings.get("onboarded"):
             self._show_orb()
@@ -180,10 +185,56 @@ class App:
             self._tile_moved()
 
     def _normal_launch(self) -> None:
-        """Quiet start: the orb fades in with the cursor docked beside it, then Ask Click opens."""
+        """Start: the orb fades in, Clicky waves hello, Ask Click opens, and any missing permission is
+        stated plainly (so Clicky never fails silently)."""
         self._show_orb()
         self.tile.url and self.tile.show_chat()  # load the full chat in the background, ready when wanted
         QTimer.singleShot(700, lambda: self.ask and not self.ask.isVisible() and self.ask.toggle(self.bubble))
+        QTimer.singleShot(1400, self.ghost.hello)
+        QTimer.singleShot(2500, self._report_permissions)
+
+    def _report_permissions(self) -> None:
+        problems = self.platform.check_permissions()
+        if problems and self.ask:
+            self.ask.status.setWordWrap(True)
+            self.ask.status.setText("Clicky needs permission: " + " ".join(problems))
+            self.notify("Clicky needs permission to see and point: " + " ".join(problems))
+
+    def check_clicky(self) -> None:
+        """Menu bar > Check Clicky: test everything Clicky needs and show the results."""
+        from PySide6.QtWidgets import QMessageBox
+
+        lines = []
+
+        def ok(cond, good, bad):
+            lines.append(("\u2705 " if cond else "\u274c ") + (good if cond else bad))
+
+        problems = self.platform.check_permissions()
+        ok(not problems, "Permissions: Screen Recording and Accessibility are on", "Permissions: " + " ".join(problems))
+        for label, getter in (("Dock icons", self.platform.dock_items), ("Menu bar items", self.platform.menu_bar_items),
+                              ("Desktop icons", self.platform.desktop_items)):
+            try:
+                n = len(getter())
+                ok(n > 0 or label == "Desktop icons", f"{label}: sees {n}", f"{label}: sees none (Accessibility?)")
+            except Exception as exc:  # noqa: BLE001
+                ok(False, "", f"{label}: error {exc}")
+        try:
+            img, _, _, _ = self.screen.capture_image("monitor:1", None)
+            ok(img.getbbox() is not None, f"Screenshots work ({img.width}x{img.height})", "Screenshots come back blank")
+        except Exception as exc:  # noqa: BLE001
+            ok(False, "", f"Screenshots fail: {exc}")
+        ok(self._models_present(), f"AI engine ready ({self.models['chat']})", "AI engine or model missing (Ollama)")
+        ok(bool(self.hub and self.hub.alive()) or self.mode == "box", "Chat part running",
+           "Chat part not running: " + (self.hub.last_error if self.hub else ""))
+        ok(self.server.pi_connected, "Clicky is connected to the chat", "Clicky isn't connected to the chat")
+        ok(not self.paused, "Not paused", "Everything is paused (menu bar > Resume)")
+        self.ghost.summon("This is Clicky. If you can see me, the cursor works!", True)
+        QTimer.singleShot(3500, self.ghost.rest)
+        box = QMessageBox()
+        box.setWindowTitle("Check Clicky")
+        box.setText("\n".join(lines))
+        box.setInformativeText("Take a screenshot of this and send it if something has a \u274c.")
+        box.exec()
 
     def _warm(self) -> None:
         """Load the AI model into memory now, so the first question doesn't wait for it."""
@@ -219,7 +270,10 @@ class App:
             self._setup_thread = run_setup(view, self.settings["ollama_url"], models, setup_done)
 
         def finished():
+            from . import __version__
+
             self.settings.set("onboarded", True)
+            self.settings.set("welcome_version", __version__)
             self._normal_launch()
 
         self.onboarding.finished.connect(finished)
@@ -641,6 +695,11 @@ class App:
 
     async def cursor_inspect(self, p):
         return await self.actions.inspect(p)
+
+    async def cursor_summon(self, p):
+        self.bridge.ghostSummon.emit(str(p.get("label") or "Hi! I'm Clicky."), bool(p.get("center", True)))
+        await asyncio.sleep(0.8)
+        return {"status": "visible"}
 
     async def cursor_hide(self, p):
         return await self.actions.hide(p)

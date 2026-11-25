@@ -65,6 +65,7 @@ ROUTES = {
     ("cursor", "highlight"): ("cursor", "cursor_highlight", False),
     ("cursor", "inspect"): ("cursor", "cursor_inspect", False),
     ("cursor", "hide"): (None, "cursor_hide", False),
+    ("cursor", "summon"): ("cursor", "cursor_summon", False),
     ("cursor", "teach_step"): ("cursor", "cursor_teach", False),
     ("cursor", "click"): ("actions", "action_click", False),
     ("cursor", "type_text"): ("actions", "action_type", False),

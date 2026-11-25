@@ -88,22 +88,20 @@ class Skills:
         return {"status": "done", "steps": done}
 
     # ---- helpers ------------------------------------------------------------------------------------------
-    async def _point(self, query: str, label: str, fallback_center: bool = False) -> None:
-        """Glide Click's cursor to something on screen (best effort) so the user sees what's happening."""
+    async def _point(self, query: str, label: str, fallback_center: bool = True) -> None:
+        """Clicky glides to the thing (its Dock icon, window...). If it can't be found, Clicky still
+        appears in the middle of the screen with the label, so you always see what it's doing."""
         try:
             found = await asyncio.to_thread(self.app.screen.find_ui_element, query)
             if found.get("matches"):
                 await self.app.actions.move({"element_id": found["matches"][0]["id"], "label": label})
                 return
         except Exception:  # noqa: BLE001
-            pass
-        if fallback_center:
-            w = self.app.platform.active_window()
-            if w:
-                cx, cy = w.rect.center
-                self.app.bridge.ghostMove.emit(float(cx), float(cy), label)
-                await asyncio.sleep(0.7)
-        self.app.bridge.narrate.emit(label)
+            log.exception("finding %s failed", query)
+        w = self.app.platform.active_window()
+        x, y = (w.rect.center if w else self.app.ghost.primary_center())
+        self.app.bridge.ghostMove.emit(float(x), float(y), label)
+        await asyncio.sleep(0.8)
 
     # ---- the skills -------------------------------------------------------------------------------------------
     async def open_app(self, step: dict) -> str:
