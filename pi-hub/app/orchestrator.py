@@ -21,7 +21,7 @@ from .extract import is_image
 from .llm import BackendUnavailable
 from .memory import estimate_tokens
 from .pc_link import PcError
-from .tools import ToolContext, available_tools, execute_tool
+from .tools import ToolContext, execute_tool, select_tools
 
 log = logging.getLogger("click.orchestrator")
 
@@ -46,6 +46,12 @@ TOOL_RULES = """# How to use tools
 - Don't build long-term profiles of other people; only remember things about the user."""
 
 
+# "show me where the Wi-Fi is", "where's the settings button", "point to Downloads", "find the export button"
+POINT_RE = re.compile(
+    r"^(?:can you |could you |please |hey click,? )*(?:show me |tell me )?(?:where(?:'s| is| are)?|point (?:at|to)|"
+    r"find|locate|show me)\s+(?:the |my |a )?(?P<t>.+?)(?:\s+(?:button|icon|menu|setting|settings|option|tab|link))?"
+    r"(?:\s+(?:is|are))?(?:\s+on my (?:screen|computer|mac|laptop))?\s*[?.!]*$", re.I)
+
 SCREEN_INTENT = re.compile(
     r"\b(screen|window|monitor|on my (pc|computer|mac|laptop)|what am i (looking at|doing)|what('s| is) this|"
     r"this (error|page|message|window|app|popup|dialog)|where('s| is)|show me|point (at|to)|click (on|the)|"
@@ -67,6 +73,11 @@ class Orchestrator:
         self.incognito_sessions: dict[str, list[dict]] = {}
         self.screen_context: dict | None = None  # filled by watch mode
         self.background: set[asyncio.Task] = set()
+
+    @property
+    def fast(self) -> bool:
+        """Processor-only computers (e.g. Intel Macs): keep every prompt small so answers come in seconds."""
+        return bool(self.deps.link.connected and self.deps.link.capabilities.get("cpu_only"))
 
     # ---- conversations -------------------------------------------------------------------
     def _new_conversation(self, first_text: str) -> int:
@@ -92,7 +103,7 @@ class Orchestrator:
                 "ORDER BY id DESC LIMIT 60", (conv_id,))[::-1]
         else:
             msgs = []
-        budget = self.deps.cfg.history_token_budget
+        budget = 700 if self.fast else self.deps.cfg.history_token_budget
         out: list[dict] = []
         for m in reversed(msgs):
             content = m["content"]
@@ -264,11 +275,15 @@ class Orchestrator:
         recalled = {"core": [], "relevant": []}
         if not incognito:
             try:
-                recalled = await deps.memory.recall(text, deps.cfg.memory_token_budget, conversation_id)
+                recalled = await deps.memory.recall(text, 250 if self.fast else deps.cfg.memory_token_budget,
+                                                    conversation_id)
             except Exception:  # noqa: BLE001
                 log.exception("recall failed")
 
-        screen = await self._prefetch_screen(text, send) if backend.source == "pc" else None
+        point_note = await self._direct_point(text, send) if backend.source == "pc" else None
+        if point_note:
+            memory_note = (memory_note + "\n" if memory_note else "") + point_note
+        screen = None if point_note else (await self._prefetch_screen(text, send) if backend.source == "pc" else None)
         images = [screen["image"]] if screen and screen.get("image") else []
         if backend.source == "pc" and deps.link.capabilities.get("vision_in_chat"):
             images += self._upload_images(image_upload_ids)
@@ -289,6 +304,63 @@ class Orchestrator:
         await send({"type": "done", "source": source, "model": model, "conversation_id": conversation_id,
                     "ms": total_ms, "first_ms": tool_log.get("first_ms")})
         return {"answer": answer, "source": source, "model": model, "ms": total_ms}
+
+    async def _direct_point(self, text: str, send) -> str | None:
+        """'Show me where X is': find it and move Click's cursor there ourselves, reliably and fast,
+        instead of hoping a small model decides to call the tools. Returns a note for the model."""
+        deps = self.deps
+        m = POINT_RE.match(text.strip())
+        if not (m and deps.link.connected and deps.permissions.enabled("cursor")
+                and deps.permissions.enabled("screen_reading")):
+            return None
+        target = m.group("t").strip(" ?.!'\"")
+        if not target or len(target) > 60:
+            return None
+        await send({"type": "tool", "name": "find_ui_element", "status": "running", "caption": f"Looking for '{target}'"})
+        await deps.narrate(f"Looking for '{target}'")
+        try:
+            found = await deps.link.request("screen", "find_ui_element", {"query": target}, timeout=30)
+        except PcError as exc:
+            await send({"type": "tool", "name": "find_ui_element", "status": "failed", "error": str(exc)})
+            return f"(You tried to find '{target}' on the user's screen but it failed: {exc}. Say so briefly.)"
+        matches = found.get("matches") or []
+        if not matches:
+            await send({"type": "tool", "name": "find_ui_element", "status": "failed", "error": "not found"})
+            hint = found.get("permission_problem") or ""
+            return (f"(You looked for '{target}' on the user's screen and couldn't find it. {hint} Say so in one "
+                    "sentence and say where it usually is.)")
+        await send({"type": "tool", "name": "find_ui_element", "status": "done"})
+        best = matches[0]
+        label = f"Here's {best.get('name') or target}"
+        await send({"type": "tool", "name": "ghost_move", "status": "running"})
+        try:
+            await deps.link.request("cursor", "move", {"element_id": best["id"], "label": label}, timeout=20)
+            await send({"type": "tool", "name": "ghost_move", "status": "done"})
+        except PcError as exc:
+            await send({"type": "tool", "name": "ghost_move", "status": "failed", "error": str(exc)})
+        deps.audit.log("input", "cursor.move", f"pointed at {best.get('name')!r} for '{target}'")
+        return (f"(You already moved your cursor to '{best.get('name')}' ({best.get('role', '')}) on the user's screen "
+                f"to show them '{target}'. Tell them in one or two short sentences what it is and what to do with it. "
+                "Don't call any tools.)")
+
+    async def prewarm(self, conversation_id: int | None, partial: str) -> None:
+        """While the user types: have the model read the conversation so far, so pressing Enter only
+        leaves the last few words to process (the model keeps what it already read)."""
+        deps = self.deps
+        if getattr(self, "_warming", False) or not deps.link.connected or len(partial.strip()) < 3:
+            return
+        self._warming = True
+        try:
+            tools = select_tools(deps, partial)
+            msgs = [{"role": "system", "content": self._system_prompt("pc", bool(tools))}]
+            msgs += self._history(conversation_id, None)
+            msgs.append({"role": "user", "content": partial})
+            async for _ in deps.pc_backend.chat_stream(msgs, tools or None, options={"num_predict": 1}):
+                pass
+        except Exception:  # noqa: BLE001 - only an optimisation
+            pass
+        finally:
+            self._warming = False
 
     def _upload_images(self, upload_ids: list[int]) -> list[str]:
         """Uploaded pictures, shrunk to at most 1280 px, for a vision-capable chat model."""
@@ -320,7 +392,9 @@ class Orchestrator:
         source, model = backend.source, getattr(backend, "model", "")
         if source == "pi":
             await send({"type": "notice", "text": "Your computer is offline, so the small backup model on the Pi is answering."})
-        tools = available_tools(deps, True) if source == "pc" else []
+        tools = select_tools(deps, text) if source == "pc" and "Don't call any tools" not in (memory_note or "") else []
+        options = {"num_predict": 400} if self.fast else {}
+        max_rounds = 3 if self.fast else deps.cfg.max_tool_rounds
         messages = [{"role": "system", "content": self._system_prompt(source, bool(tools))}]
         messages += self._history(conversation_id, incognito_key)
         context = self._context_block(recalled, conversation_id, bool(tools), screen)
@@ -333,10 +407,10 @@ class Orchestrator:
         ctx = ToolContext(deps=deps, send=send, conversation_id=conversation_id, task_id=task_id,
                           user_text=text, incognito=incognito)
         answer_parts: list[str] = []
-        for _round in range(deps.cfg.max_tool_rounds + 1):
+        for _round in range(max_rounds + 1):
             round_text, calls = [], []
             try:
-                async for ev in backend.chat_stream(messages, tools or None):
+                async for ev in backend.chat_stream(messages, tools or None, options=options):
                     if state.cancel.is_set():
                         break
                     if ev["type"] == "token":
@@ -366,7 +440,7 @@ class Orchestrator:
             answer_parts.append("".join(round_text))
             if state.cancel.is_set() or not calls:
                 break
-            if _round == deps.cfg.max_tool_rounds:
+            if _round == max_rounds:
                 answer_parts.append("\n\n(I stopped after several tool steps. Tell me if you want me to continue.)")
                 break
             messages.append({"role": "assistant", "content": "".join(round_text),
@@ -394,14 +468,14 @@ class Orchestrator:
         try:
             await deps.memory.index("message", user_msg_id, user_text)
             await deps.memory.index("message", asst_id, answer[:1500])
-            if deps.permissions.enabled("memory_saving") and not skip_extract:
+            if deps.permissions.enabled("memory_saving") and not skip_extract and not self.fast:
                 saved = await deps.memory.extract_from_exchange(self._memory_backend(), user_text, answer, user_msg_id)
                 if saved and deps.broadcast:
                     await deps.broadcast({"type": "memory_saved", "facts": saved, "conversation_id": conv_id})
             conv = deps.db.one("SELECT last_episode_msg_id FROM conversations WHERE id = ?", (conv_id,))
             new_msgs = deps.db.one("SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND id > ?",
                                    (conv_id, conv["last_episode_msg_id"] if conv else 0))
-            if deps.permissions.enabled("memory_saving") and new_msgs and new_msgs["n"] >= 12:
+            if deps.permissions.enabled("memory_saving") and new_msgs and new_msgs["n"] >= 12 and not self.fast:
                 await deps.memory.summarize_conversation(self._memory_backend(), conv_id)
         except Exception:  # noqa: BLE001 - background work must never break chat
             log.exception("after-reply work failed")

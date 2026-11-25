@@ -32,14 +32,14 @@ class IconButton(QPushButton):
         self.setFixedSize(QSize(28, 28))
         self.setCursor(Qt.PointingHandCursor)
         self.setFlat(True)
-        self.setStyleSheet("QPushButton { border: none; border-radius: 7px; background: transparent; }"
-                           "QPushButton:hover { background: rgba(127,127,127,0.16); }")
+        self.setStyleSheet("QPushButton { border: none; border-radius: 8px; background: transparent; }"
+                           "QPushButton:hover { background: rgba(255,255,255,0.10); }")
 
     def paintEvent(self, e):
         super().paintEvent(e)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        col = QColor("#6d5dfc") if self.checked_look else QColor(160, 160, 170) if _dark() else QColor(113, 113, 122)
+        col = QColor("#8b7dff") if self.checked_look else QColor(170, 170, 182)
         p.setPen(QPen(col, 1.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         c = QPointF(14, 14)
         if self.kind == "close":
@@ -94,25 +94,39 @@ class Header(QWidget):
         self.browser.clicked.connect(tile.open_in_browser)
         self.minimize = IconButton("min", "Hide (Cmd/Ctrl+Shift+Space brings it back)")
         self.minimize.clicked.connect(tile.hide_tile)
+        self._spin = QTimer(self)
+        self._spin.timeout.connect(lambda: self.update(self.logo.geometry().adjusted(-4, -4, 4, 4)))
+        self._spin.start(50)
         self.close_btn = IconButton("close", "Close (Click keeps running in the menu bar)")
         self.close_btn.clicked.connect(tile.hide_tile)
         for b in (self.pin, self.browser, self.minimize, self.close_btn):
             lay.addWidget(b)
 
     def paintEvent(self, e):
+        import math
+        import time
+
+        from PySide6.QtGui import QRadialGradient
+
         super().paintEvent(e)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        r = self.logo.geometry()
+        r = QRectF(self.logo.geometry())
+        c = r.center()
+        t = time.time()
+        rad = r.width() * 0.46
+        path = QPainterPath()
+        for i in range(49):
+            a = 2 * math.pi * i / 48
+            w = 1 + math.sin(3 * a + t * 1.4) * 0.06 + math.sin(5 * a - t * 2.0) * 0.04
+            pt = QPointF(c.x() + rad * w * math.cos(a), c.y() + rad * w * math.sin(a))
+            path.moveTo(pt) if i == 0 else path.lineTo(pt)
+        g = QRadialGradient(QPointF(c.x() + rad * 0.4 * math.cos(t), c.y() + rad * 0.4 * math.sin(t)), rad * 1.7)
+        g.setColorAt(0, QColor("#22d3ee"))
+        g.setColorAt(0.6, QColor(self.tile.accent))
+        g.setColorAt(1, QColor(self.tile.accent).darker(160))
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(self.tile.accent))
-        p.drawRoundedRect(QRectF(r), 5, 5)
-        o = QPointF(r.x() + 6, r.y() + 4)
-        path = QPainterPath(o)
-        for dx, dy in ((0, 10), (2.6, 7.4), (4.4, 10.8), (6, 10), (4.3, 6.7), (7.6, 6.5)):
-            path.lineTo(o + QPointF(dx, dy))
-        path.closeSubpath()
-        p.setBrush(QColor("white"))
+        p.setBrush(g)
         p.drawPath(path)
         p.end()
 
@@ -251,9 +265,8 @@ class Tile(QWidget):
         self.setMinimumSize(320, 360)
         self.frame = QWidget(self)
         self.frame.setObjectName("frame")
-        bg = "#131316" if _dark() else "#ffffff"
-        border = "#26262b" if _dark() else "#e4e4e7"
-        self.frame.setStyleSheet(f"QWidget#frame {{ background: {bg}; border: 1px solid {border}; border-radius: 14px; }}")
+        self.frame.setStyleSheet("QWidget#frame { background: rgba(17,17,22,0.96); border: 1px solid "
+                                 "rgba(109,93,252,0.45); border-radius: 20px; } QLabel { color: #f4f4f5; }")
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self.frame)
@@ -282,7 +295,7 @@ class Tile(QWidget):
 
         self.web = QWebEngineView()
         self.web.setPage(Page(profile, self.web))
-        self.web.page().setBackgroundColor(QColor(bg))
+        self.web.page().setBackgroundColor(QColor(17, 17, 22))
         self.web.loadFinished.connect(self._loaded)
         self.web.page().renderProcessTerminated.connect(
             lambda status, code: __import__("logging").getLogger("click.tile").error(

@@ -9,7 +9,7 @@ from typing import Awaitable, Callable
 import httpx
 
 
-KEEP_ALIVE = "10m"  # keep the model loaded between questions, but free the RAM after 10 idle minutes
+KEEP_ALIVE = "30m"  # keep the model loaded between questions (reloading costs seconds); freed after 30 idle min
 THREADS = max(2, (__import__("os").cpu_count() or 4) - 2)  # leave cores free so the computer never bogs down
 
 
@@ -55,7 +55,7 @@ class Inference:
     @property
     def num_ctx(self) -> int:
         """Smaller working memory on processor-only computers = faster answers."""
-        return 4096 if self.models.get("image_device") == "cpu" else 8192
+        return 3072 if self.models.get("image_device") == "cpu" else 8192
 
     @property
     def vision_in_chat(self) -> bool:

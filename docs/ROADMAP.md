@@ -209,3 +209,19 @@ Pi, auto-start on box detection, and wipe-on-unplug.
 - A cursor tutorial plays on every start. Click's cursor rests (docked) beside the orb when idle.
 - Orb: calm grey "paused" state. It sits a layer above the cursor overlay, so it no longer flickers.
 - The header shows the real status and how much memory the AI is using (roadmap item).
+
+## Built in version 1.6
+- **Speed (processor-only Macs):**
+  - Only the tools a question needs are sent (plain questions send none).
+  - Shorter history and memory.
+  - No hidden memory-extraction call after each answer.
+  - Answers default to 1-3 sentences and are capped.
+  - The model stays loaded for 30 minutes and warms up at launch.
+  - **Read-ahead while typing:** the conversation is pre-read, so Enter only adds the last words.
+- **Pointing that always works:** "show me / where is / point to / find X" is handled directly. Click
+  finds X (accessibility, menu bar, or on-screen text), moves its cursor there, then explains.
+  It no longer depends on the small model deciding to use a tool.
+- **Menu bar items** (Wi-Fi, battery, sound, app menus) can be found and pointed at.
+- **First-launch welcome:** Meet Click, the cursor demo, permissions, setup with progress, then
+  ready. Later launches are quiet: the orb, the docked cursor and Ask Click.
+- **The full chat is dark glass** like the orb, with a live mini-orb in its header.

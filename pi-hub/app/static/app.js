@@ -14,7 +14,10 @@ const el = (tag, attrs = {}, ...children) => {
   return node;
 };
 
-if (new URLSearchParams(location.search).has("tile")) document.body.classList.add("tile");
+if (new URLSearchParams(location.search).has("tile")) {
+  document.body.classList.add("tile");
+  document.documentElement.dataset.theme = "dark";   // the floating window is always dark glass, like the orb
+}
 hydrateIcons();
 const ib = (name, title, onclick, cls = "icon-btn") => { const b = el("button", { class: cls, type: "button", title, "aria-label": title, onclick }); b.append(icon(name)); return b; };
 const withIcon = (name, text) => [icon(name), text];
@@ -70,7 +73,8 @@ function applySettings(s) {
   state.settings = s;
   const root = document.documentElement;
   root.style.setProperty("--accent", s.accent_color || "#7c3aed");
-  if (s.theme === "light" || s.theme === "dark") root.dataset.theme = s.theme; else delete root.dataset.theme;
+  if (document.body.classList.contains("tile")) root.dataset.theme = "dark";
+  else if (s.theme === "light" || s.theme === "dark") root.dataset.theme = s.theme; else delete root.dataset.theme;
   root.dataset.font = s.font_size || "medium";
   root.dataset.chatStyle = s.chat_style || "bubbles";
   const dark = s.theme === "dark" || (s.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
@@ -666,6 +670,16 @@ $("#input").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit($("#input").value); }
 });
 $("#input").addEventListener("input", autosize);
+// Read ahead while typing: Click starts reading the conversation, so answers start sooner.
+let typingTimer;
+$("#input").addEventListener("input", () => {
+  clearTimeout(typingTimer);
+  typingTimer = setTimeout(() => {
+    const text = $("#input").value;
+    if (!state.busy && text.trim().length > 2 && state.ws?.readyState === 1)
+      state.ws.send(JSON.stringify({ type: "typing", text, conversation_id: state.incognito ? null : state.conversationId }));
+  }, 600);
+});
 $("#input").addEventListener("paste", e => {
   const files = [...(e.clipboardData?.files || [])];
   if (files.length) { e.preventDefault(); uploadFiles(files); }

@@ -332,7 +332,7 @@ class GhostController(QObject):
     # ---- slots -------------------------------------------------------------------------------------
     def set_home(self, x: float, y: float):
         self.home = (x, y)
-        if self.docked or not self.visible:
+        if self.docked:  # follow the orb if it's dragged; otherwise wait until the orb appears
             self.dock()
 
     def dock(self):

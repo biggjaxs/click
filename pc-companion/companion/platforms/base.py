@@ -77,6 +77,10 @@ class Platform:
     def element_at(self, x: float, y: float) -> Element | None:
         return None
 
+    def menu_bar_items(self) -> list[Element]:
+        """Items in the system menu bar / tray (Wi-Fi, battery, the app's File/Edit menus...)."""
+        return []
+
     def focused_is_sensitive(self) -> bool:
         """True if the keyboard focus is in a password / secure field."""
         return False

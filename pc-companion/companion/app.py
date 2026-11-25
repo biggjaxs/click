@@ -109,9 +109,6 @@ class App:
         self.bubble.clicked.connect(self.toggle_ask)
         self.bubble.moved.connect(self._tile_moved)
         self.bubble.set_state("starting")
-        if not self.selftest:
-            self.bubble.show()
-            self.platform.configure_overlay(self.bubble, click_through=False)  # float above every app, still clickable
         url = f"http://{self.settings['pi_host']}"
         self.tile = Tile(url, str(config_dir() / "web"), self.settings["cursor"]["color"])
         self.tile.place_under(self.bubble)
@@ -140,13 +137,71 @@ class App:
         if self.selftest:
             QTimer.singleShot(500, self._selftest_check)
             return
-        if self.settings.get("setup_done") and self._models_present():
-            self.tile.show_tile()          # opening Click opens the chat
-            self.tile.show_chat()
-            QTimer.singleShot(1500, self.ghost.demo)   # quick cursor tutorial on every start
-        else:
+        self._warm()
+        if self.settings.get("onboarded") and self.settings.get("setup_done") and self._models_present():
+            self._normal_launch()
+        elif self.settings.get("onboarded"):
+            self._show_orb()
             self.tile.show_tile()
             self._run_setup()
+        else:
+            self._onboard()
+
+    def _show_orb(self) -> None:
+        if not self.selftest and not self.bubble.isVisible():
+            self.bubble.show()
+            self.platform.configure_overlay(self.bubble, click_through=False)  # float above every app, still clickable
+            self._tile_moved()
+            self.ghost.dock()
+
+    def _normal_launch(self) -> None:
+        """Quiet start: the orb fades in with the cursor docked beside it, then Ask Click opens."""
+        self._show_orb()
+        self.tile.url and self.tile.show_chat()  # load the full chat in the background, ready when wanted
+        QTimer.singleShot(700, lambda: self.ask and not self.ask.isVisible() and self.ask.toggle(self.bubble))
+
+    def _warm(self) -> None:
+        """Load the AI model into memory now, so the first question doesn't wait for it."""
+        if self.server.loop:
+            asyncio.run_coroutine_threadsafe(self.inference.warm_up(), self.server.loop)
+
+    def _onboard(self) -> None:
+        """First launch: a short guided welcome; setup runs in the background meanwhile."""
+        from .onboarding import Onboarding
+        from .setup import mac_permission_rows, run_setup
+        from .tile import SetupView
+
+        view = SetupView()
+        self.onboarding = Onboarding(self.settings["cursor"]["color"], view,
+                                     lambda: mac_permission_rows(self.platform))
+        self.onboarding.show_cursor.connect(self.ghost.demo)
+
+        def setup_done(ok: bool, message: str):
+            if ok:
+                self.settings.set("setup_done", True)
+                view.title.setText("Ready")
+                view.sub.setText("Click's brain is downloaded and loaded.")
+            else:
+                view.title.setText("Setup needs a hand")
+                view.sub.setText(message)
+                view.cont.setText("Try again")
+                view.cont.show()
+                view.continue_clicked.connect(lambda: (view.cont.hide(), start()))
+            self.onboarding.set_setup_done(ok)
+
+        def start():
+            models = list(dict.fromkeys([self.models["chat"], self.models["vision"]]))
+            self._setup_thread = run_setup(view, self.settings["ollama_url"], models, setup_done)
+
+        def finished():
+            self.settings.set("onboarded", True)
+            self._normal_launch()
+
+        self.onboarding.finished.connect(finished)
+        self.onboarding.show()
+        self.onboarding.raise_()
+        self.onboarding.activateWindow()
+        start()
 
     def _after_hub_start(self) -> None:
         cert = self.hub.ensure_paired(self.server.identity.cert, self.settings["pc_id"], self.settings["pc_name"],
@@ -273,15 +328,13 @@ class App:
         """Opening Click from Applications/Spotlight while it's running brings it back."""
         from PySide6.QtCore import Qt as _Qt
 
-        if state == _Qt.ApplicationActive and self.bubble and not self.selftest:
-            self.bubble.show()
+        if state == _Qt.ApplicationActive and self.bubble and not self.selftest and self.settings.get("onboarded"):
+            self._show_orb()
             self.bubble.raise_()
-            # Clicking Click in Applications/Dock/Spotlight while it runs brings the chat back.
-            if self.tile and not self.tile.isVisible() and not (self.ask and self.ask.isVisible()) \
-                    and self.settings.get("setup_done") and time.time() - getattr(self, "_started", 0) > 3:
-                self.tile.show_tile()
-                if self.tile.stack.currentWidget() is not self.tile.web:
-                    self.tile.show_chat()
+            # Clicking Click in Applications/Dock/Spotlight while it runs brings Ask Click back.
+            if self.settings.get("onboarded") and self.ask and not self.ask.isVisible() \
+                    and not (self.tile and self.tile.isVisible()) and time.time() - getattr(self, "_started", 0) > 3:
+                self.ask.toggle(self.bubble)
 
     def _on_continue(self, fn) -> None:
         view = self.tile.setup

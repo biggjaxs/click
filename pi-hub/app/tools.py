@@ -141,6 +141,38 @@ def available_tools(deps, pc_connected: bool) -> list[dict]:
     return tools
 
 
+# Only send the tools a question actually needs. Every tool description is text the model must read
+# before answering, so a plain chat question with no tools is several times faster on a laptop CPU.
+_WANT = {
+    "web": re.compile(r"\b(search|look up|google|latest|news|today|tonight|weather|price|cost|score|who won|"
+                      r"current|website|online|internet|recent)\b", re.I),
+    "image": re.compile(r"\b(draw|image|picture|photo|logo|illustrat\w*|paint\w*|sketch|wallpaper|generate an?)\b", re.I),
+    "screen": re.compile(r"\b(screen|window|monitor|see|look|showing|where|show me|point|button|menu|icon|"
+                         r"settings?|open|tab|app|error|this)\b", re.I),
+    "act": re.compile(r"\b(click|press|type|scroll|tap|select|close|open)\b", re.I),
+    "files": re.compile(r"\b(files?|folders?|documents?|downloads|desktop|pdf|spreadsheet|rename|move)\b", re.I),
+    "memory": re.compile(r"\b(remember|forget|my name|about me)\b", re.I),
+}
+_GROUPS = {
+    "web": {"web_search", "fetch_web_page"},
+    "image": {"generate_image"},
+    "screen": {"get_screen", "read_screen_text", "find_ui_element", "get_ui_elements", "ghost_move",
+               "ghost_highlight", "ghost_hide", "teach_step", "list_windows", "get_active_window"},
+    "act": {"find_ui_element", "ghost_move", "click", "type_text", "press_keys", "scroll"},
+    "files": {"list_folder", "read_file", "search_files", "rename_file", "move_file"},
+    "memory": {"remember", "forget"},
+}
+
+
+def select_tools(deps, text: str) -> list[dict]:
+    """The tools this message plausibly needs (often none)."""
+    wanted: set[str] = set()
+    for group, rx in _WANT.items():
+        if rx.search(text or ""):
+            wanted |= _GROUPS[group]
+    return [t for t in available_tools(deps, True) if t["function"]["name"] in wanted]
+
+
 NARRATION = {
     "get_screen": "Looking at your screen", "read_screen_text": "Reading the text on your screen",
     "find_ui_element": "Looking for {query}", "get_ui_elements": "Reading the buttons in this window",

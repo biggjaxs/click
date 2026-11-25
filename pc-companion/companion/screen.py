@@ -238,6 +238,15 @@ class ScreenService:
                 score = 1.0 if name == q else 0.9 if q in name else difflib.SequenceMatcher(None, q, name).ratio()
                 if score >= 0.55:
                     scored.append((score - 0.05 * wins.index(win), el))
+        try:  # the menu bar (Wi-Fi, battery, sound, app menus) isn't inside any window
+            for el in self.platform.menu_bar_items():
+                name = el.name.lower()
+                score = 1.0 if name == q else 0.92 if q in name or name in q else \
+                    difflib.SequenceMatcher(None, q, name).ratio()
+                if score >= 0.6:
+                    scored.append((score, el))
+        except Exception:  # noqa: BLE001
+            pass
         source = "accessibility"
         if not scored or scored and max(sc for sc, _ in scored) < 0.85:
             scored += self._find_by_text(q)

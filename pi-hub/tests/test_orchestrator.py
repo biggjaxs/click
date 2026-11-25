@@ -53,7 +53,7 @@ def test_tool_loop_remember_then_answer(services):
     second = services.pc_backend.calls[1]["messages"]
     assert second[-1]["role"] == "tool" and "Saved to memory" in second[-1]["content"]
     tool_names = {t["function"]["name"] for t in services.pc_backend.calls[0]["tools"]}
-    assert {"generate_image", "get_screen", "ghost_move", "click", "web_search"} <= tool_names
+    assert "remember" in tool_names and "generate_image" not in tool_names  # only the tools this message needs
 
 
 def test_permission_off_blocks_tool(services):
@@ -228,3 +228,38 @@ def test_system_prompt_is_stable_between_turns(services):
     s2 = chat_calls[1]["messages"][0]["content"]
     assert s1 == s2
     assert "Jaxon" in chat_calls[1]["messages"][-1]["content"]
+
+
+def test_plain_question_sends_no_tools_and_pointing_sends_cursor_tools(services):
+    from app.tools import select_tools
+
+    assert select_tools(services, "what is 12 times 7?") == []
+    names = {t["function"]["name"] for t in select_tools(services, "show me where the wifi button is")}
+    assert {"find_ui_element", "ghost_move"} <= names and "generate_image" not in names
+
+
+def test_show_me_where_moves_the_cursor_without_relying_on_the_model(services):
+    services.link.connected = True
+    services.link.capabilities = {"cpu_only": True, "vision_in_chat": True}
+    calls = []
+
+    async def fake_request(service, action, payload, **kw):
+        calls.append((service, action, payload))
+        if action == "find_ui_element":
+            return {"matches": [{"id": "e7", "name": "Wi-Fi", "role": "MenuBarItem"}]}
+        return {"status": "pointing"}
+
+    async def fake_event(*a, **k):
+        pass
+
+    services.link.request = fake_request
+    services.link.send_event = fake_event
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "That's your Wi-Fi menu."}]])
+    rec = Recorder()
+    out = run(services.orchestrator.handle(send=rec, text="Show me where the Wi-Fi is", conversation_id=None,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    assert ("screen", "find_ui_element", {"query": "Wi-Fi"}) in calls
+    assert any(c[:2] == ("cursor", "move") and c[2]["element_id"] == "e7" for c in calls)
+    first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
+    assert first["tools"] is None and "moved your cursor" in first["messages"][-1]["content"]
+    assert out["answer"] == "That's your Wi-Fi menu."

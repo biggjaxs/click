@@ -97,6 +97,13 @@ class QuickAsk(QWidget):
         self.input = QLineEdit()
         self.input.setPlaceholderText("Ask Click anything…")
         self.input.returnPressed.connect(self._send)
+        # Read ahead while the user types (pressing Enter then only leaves a few words to process).
+        self._typing = QTimer(self)
+        self._typing.setSingleShot(True)
+        self._typing.setInterval(600)
+        self._typing.timeout.connect(lambda: self.busy or self.link.send(
+            {"type": "typing", "text": self.input.text(), "conversation_id": self.conversation_id}))
+        self.input.textEdited.connect(lambda _t: self._typing.start())
         self.input.setStyleSheet(
             "QLineEdit { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
             f" border-radius: 12px; padding: 10px 12px; font-size: 14px; selection-background-color: {accent}; }}"

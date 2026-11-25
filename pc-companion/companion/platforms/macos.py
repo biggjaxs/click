@@ -119,6 +119,27 @@ class MacPlatform(Platform):
                                window_title=window.title))
         return out
 
+    def menu_bar_items(self) -> list[Element]:
+        """Menu bar icons (Wi-Fi, battery, sound, Control Center...) and the front app's menus."""
+        ws = NSWorkspace.sharedWorkspace()
+        pids = [a.processIdentifier() for a in ws.runningApplications()
+                if (a.bundleIdentifier() or "") in ("com.apple.controlcenter", "com.apple.systemuiserver",
+                                                    "com.apple.Spotlight", "com.apple.TextInputMenuAgent")]
+        front = ws.frontmostApplication()
+        if front:
+            pids.append(front.processIdentifier())
+        out: list[Element] = []
+        for pid in pids:
+            app = AXUIElementCreateApplication(pid)
+            for attr in ("AXExtrasMenuBar", "AXMenuBar"):
+                bar = _attr(app, attr)
+                for el in (_attr(bar, "AXChildren") or []) if bar is not None else []:
+                    name = _attr(el, "AXTitle") or _attr(el, "AXDescription") or _attr(el, "AXIdentifier") or ""
+                    rect = _rect_of(el)
+                    if name and rect and rect.w > 2:
+                        out.append(Element(name=str(name)[:80], role="MenuBarItem", rect=rect, window_title="Menu bar"))
+        return out
+
     def element_at(self, x: float, y: float) -> Element | None:
         err, el = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), float(x), float(y), None)
         if err != 0 or el is None:

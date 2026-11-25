@@ -691,6 +691,9 @@ async def chat_ws(ws: WebSocket):
                         await send({"type": "done", "source": "", "model": ""})
 
                 turn_task = asyncio.create_task(run_turn())
+            elif kind == "typing":
+                if not (turn_task and not turn_task.done()):
+                    asyncio.create_task(s.orchestrator.prewarm(msg.get("conversation_id"), str(msg.get("text", ""))[:2000]))
             elif kind == "stop":
                 if state:
                     state.cancel.set()
