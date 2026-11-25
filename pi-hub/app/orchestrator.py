@@ -306,6 +306,16 @@ class Orchestrator:
                 log.exception("recall failed")
 
         point_note = quick
+        lesson_q = re.match(r"^\(I'm in the lesson \"(?P<t>[^\"]*)\", on step (?P<n>\d+) of \d+: \"(?P<s>[^\"]*)\"\. "
+                            r"Answer briefly about this step\.\)\s*(?P<q>.+)$", text, re.S)
+        if lesson_q and point_note is None and backend.source == "pc":
+            # a question in the middle of a lesson: if it's "where is ...", Clicky points; otherwise answer it
+            # about this step (never start a new task or lesson by accident)
+            point_note = await self._direct_point(lesson_q.group("q"), send)
+            if point_note is None:
+                point_note = (f"(The user is following your lesson \"{lesson_q.group('t')}\" on their Mac and is on "
+                              f"step {lesson_q.group('n')}: \"{lesson_q.group('s')}\". Answer their question about this "
+                              "step in one to three short, friendly sentences. Don't call any tools.)")
         if point_note is None:
             math_answer = quickmath.solve(text)
             if math_answer:

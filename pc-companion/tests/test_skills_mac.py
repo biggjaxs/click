@@ -173,3 +173,39 @@ def test_shortcuts_lock_trash_and_folders(monkeypatch):
     confirms.clear()
     run(skills.run({"plan": [{"skill": "empty_trash"}]}))
     assert confirms[0][1] == "high"  # can't be undone: always asks
+
+
+def test_lesson_voice_commands_are_understood():
+    from companion.voice import clean_transcript, lesson_command
+
+    assert lesson_command("Next.") == "next" and lesson_command("okay got it") == "next"
+    assert lesson_command("Say that again") == "repeat" and lesson_command("go back") == "back"
+    assert lesson_command("Stop the lesson.") == "stop"
+    assert lesson_command("where is the send button?") is None  # a question, not a command
+    assert clean_transcript(" [BLANK_AUDIO]\n Hello there.\n") == "Hello there."
+
+
+def test_lesson_can_go_back_and_stop(monkeypatch):
+    from companion import voice
+
+    spoken = []
+    monkeypatch.setattr(voice, "speak", lambda t, **k: spoken.append(t))
+    fake = FakeRun()
+    skills, app, confirms, moves = make_app(monkeypatch, fake)
+    said = iter(["back", None, "stop"])
+
+    async def teach_step(a):  # the user says "back" on step 2, then clicks, then says "stop" on step 2
+        cmd = next(said)
+        if cmd:
+            app.lesson["cmd"] = cmd
+            a["interrupt"].set()
+            return {"status": "timeout"}
+        return {"status": "user_clicked"}
+
+    app.actions.teach_step = teach_step
+    out = run(skills.guide({"title": "How to send an email", "steps": [
+        {"say": "Look at Mail.", "wait_text": 0.01}, {"target": "New Message", "say": "Click here."},
+        {"target": "Send", "say": "Click Send."}]}))
+    # step 1, "back" on step 2 -> step 1 again, step 2 clicked, "stop" on step 3
+    assert out["steps_done"] == 2 and app.lesson["active"] is False
+    assert sum("Step 1." in t for t in spoken) == 2 and spoken[-1].startswith("Okay, stopping")

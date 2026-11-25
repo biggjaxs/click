@@ -102,6 +102,9 @@ class Bridge(QObject):
     styleChanged = Signal()
     statusChanged = Signal()
     notify = Signal(str)
+    heard = Signal(str, str)            # voice: (what you said, error)
+    voiceLevel = Signal(float)          # how loud you're talking (0..1), for the mic button
+    voiceStatus = Signal(str)           # e.g. "Downloading Clicky's voice... 40%"
 
 
 GLASS = QColor(22, 22, 26, 235)   # dark translucent card used for captions and status
@@ -180,7 +183,7 @@ class Overlay(QWidget):
                 self._tag(p, pt + QPointF(26 * SCALE, 26 * SCALE), name, color)
             text = c.bubble or c.caption_text()
             if text:
-                self._card(p, pt + QPointF(26 * SCALE, 52 * SCALE), text, color)
+                self._card(p, pt, text, color, smart=True)
         elif primary and c.caption_text() and not c.any_pointer_visible():
             # nothing to point at yet: show the caption bottom-centre so you always see what Click is doing
             self._card(p, None, c.caption_text(), color)
@@ -227,8 +230,20 @@ class Overlay(QWidget):
         p.setPen(QColor("white"))
         p.drawText(r, Qt.AlignCenter, text)
 
-    def _card(self, p: QPainter, at: QPointF | None, text: str, color: QColor):
-        """Dark caption card with an accent bar. at=None -> bottom centre of this screen."""
+    def _avoid(self) -> list:
+        """Click's own windows (chat, Ask box, orb) in this layer's coordinates: never draw over them."""
+        out = []
+        try:
+            me = self.geometry().topLeft()
+            for g in self.controller.avoid_fn():
+                out.append(QRectF(g.translated(-me.x(), -me.y())).adjusted(-8, -8, 8, 8))
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
+    def _card(self, p: QPainter, at: QPointF | None, text: str, color: QColor, smart: bool = False):
+        """Dark caption card with an accent bar. at=None -> bottom centre of this screen. smart=True: `at` is
+        the pointer; the card goes beside it wherever it's fully on screen and clear of Click's own windows."""
         f = self._font(12)
         p.setFont(f)
         fm = QFontMetrics(f)
@@ -236,6 +251,25 @@ class Overlay(QWidget):
         w, h = br.width() + 34, br.height() + 20
         if at is None:
             r = QRectF((self.width() - w) / 2, self.height() - h - 90, w, h)
+        elif smart:
+            screen = QRectF(8, 8, self.width() - 16, self.height() - 16)
+            avoid = self._avoid()
+            o = 26 * SCALE
+            spots = [QPointF(at.x() + o, at.y() + 52 * SCALE), QPointF(at.x() - w - o, at.y() + 30 * SCALE),
+                     QPointF(at.x() + o, at.y() - h - 18), QPointF(at.x() - w - o, at.y() - h - 18),
+                     QPointF(at.x() - w / 2, at.y() + 60 * SCALE), QPointF(at.x() - w / 2, at.y() - h - 30)]
+            r = None
+            for sp in spots:
+                cand = QRectF(sp.x(), sp.y(), w, h)
+                if screen.contains(cand) and not any(cand.intersects(a) for a in avoid):
+                    r = cand
+                    break
+            if r is None:  # nowhere is perfect: stay on screen at least
+                r = QRectF(spots[0].x(), spots[0].y(), w, h)
+                r.moveRight(min(r.right(), screen.right()))
+                r.moveLeft(max(r.left(), screen.left()))
+                r.moveBottom(min(r.bottom(), screen.bottom()))
+                r.moveTop(max(r.top(), screen.top()))
         else:
             r = QRectF(at.x(), at.y(), w, h)
             if r.right() > self.width() - 10:
@@ -281,6 +315,9 @@ class GhostController(QObject):
         self.arrived_at = 0.0
         self.highlights: list[dict] = []
         self.flags = {"capture": 0.0, "watch": False, "control": False, "paused": False}
+        self.avoid_fn = lambda: []        # set by the app: Click's own windows (Qt global rects)
+        self.own_windows_fn = lambda: []  # set by the app: the windows themselves, to fade out of Clicky's way
+        self._faded: list = []
         self._anim = None
         self._ticks = 0
         self.overlays: list[Overlay] = []
@@ -304,6 +341,65 @@ class GhostController(QObject):
     @property
     def style(self) -> dict:
         return self.settings["cursor"]
+
+    def qt_point(self, x: float, y: float):
+        """Screen coordinates -> Qt global point (for comparing with window geometry)."""
+        for o in self.overlays:
+            if o.smap.contains(x, y):
+                local = o.smap.to_local(x, y)
+                tl = o.geometry().topLeft()
+                return QPointF(tl.x() + local.x(), tl.y() + local.y())
+        return QPointF(x, y)
+
+    def clear_spot(self, x: float, y: float) -> tuple[float, float]:
+        """A spot near (x, y) that isn't on top of Click's own windows (for hellos and resting)."""
+        try:
+            rects = self.avoid_fn()
+            pt = self.qt_point(x, y)
+            for g in rects:
+                if g.adjusted(-40, -40, 40, 40).contains(pt.toPoint()):
+                    left = min(r.left() for r in rects) - 200  # just left of Click's windows
+                    return x - (pt.x() - left), y
+        except Exception:  # noqa: BLE001
+            pass
+        return x, y
+
+    def _clear_way(self, x: float, y: float):
+        """If Clicky needs to point at something under the chat or the Ask box, fade that window out of the
+        way until Clicky is done (it comes back by itself)."""
+        self._restore_faded()
+        try:
+            pt = self.qt_point(x, y)
+            from PySide6.QtCore import QRect
+
+            # the pointer plus room for its caption beside it
+            zone = QRect(int(pt.x()) - 30, int(pt.y()) - 30, 60, 60)
+            bubble = QRect(int(pt.x()) - 420, int(pt.y()) - 40, 840, 200)
+            for w in self.own_windows_fn():
+                g = w.frameGeometry()
+                if w.isVisible() and (g.intersects(zone) or (g.intersects(bubble) and self._no_room(pt, g))):
+                    w.setWindowOpacity(0.08)
+                    self._faded.append(w)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _no_room(self, pt, g) -> bool:
+        """True if there's no clear space beside the pointer for its caption (left or right of it)."""
+        o = next((ov for ov in self.overlays if ov.geometry().contains(pt.toPoint())), None)
+        if not o:
+            return False
+        geo = o.geometry()
+        right_free = pt.x() + 420 < geo.right() and not (g.left() < pt.x() + 420 and g.right() > pt.x())
+        left_free = pt.x() - 420 > geo.left() and not (g.right() > pt.x() - 420 and g.left() < pt.x())
+        return not (right_free or left_free)
+
+    def _restore_faded(self):
+        for w in self._faded:
+            try:
+                w.setWindowOpacity(1.0)
+            except Exception:  # noqa: BLE001
+                pass
+        self._faded = []
 
     def _screens_changed(self):
         """A screen was plugged in, removed or changed resolution (or the Mac woke up): redraw Clicky's
@@ -393,6 +489,7 @@ class GhostController(QObject):
             start = self.home or (x - 200, y - 140)
         dist = math.hypot(x - start[0], y - start[1])
         duration = max(0.55, min(1.1, 0.35 + dist / 1800))
+        self._clear_way(x, y)
         self.x, self.y = start
         self._anim = {"from": start, "to": (x, y), "t0": time.time(), "dur": duration}
         self.visible = True
@@ -418,16 +515,20 @@ class GhostController(QObject):
         self.caption = ""
         self.highlights = []
         if not self.visible:
+            self._restore_faded()
             return
         if self.home and math.hypot(self.x - self.home[0], self.y - self.home[1]) < 40:
             self.visible = False  # already home: just disappear
             self.docked = False
             self._anim = None
+            self._restore_faded()
         elif self.home:
             self.move_to(*self.home, "")
+            self._restore_faded()  # going home: the chat comes back now
             self._vanish_after_anim = True
         else:
             self.visible = False
+            self._restore_faded()
 
     def set_indicator(self, name: str, on: bool):
         if name == "capture":
@@ -454,7 +555,8 @@ class GhostController(QObject):
         if not self.overlays:
             return
         hx, hy = self.home or self.primary_center()
-        QTimer.singleShot(0, lambda: self.move_to(hx - 220, hy + 160, "Hi, I'm Clicky! Ask me where things are."))
+        x, y = self.clear_spot(hx - 220, hy + 160)
+        QTimer.singleShot(0, lambda: self.move_to(x, y, "Hi, I'm Clicky! Ask me where things are."))
         QTimer.singleShot(3200, self.rest)
 
     def demo(self):
@@ -503,6 +605,7 @@ class GhostController(QObject):
                     self._vanish_after_anim = False
                     self.visible = False
                     self.docked = False
+                    self._restore_faded()  # Clicky's gone: bring the chat back
         elif self.visible and time.time() - getattr(self, "last_active", 0) > self.IDLE_HIDE_S \
                 and not self._waiting_for_ok() and not getattr(self, "hold", False):
             self.rest()  # safety net: Clicky never stays parked on screen doing nothing

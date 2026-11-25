@@ -139,6 +139,20 @@ class App:
         self.ask = QuickAsk(self.tile.url, self.settings["cursor"]["color"])
         self.ask.hub_error = lambda: self.hub.last_error if self.hub else ""
         self.ask.speak_enabled = lambda: bool(self.settings.get("speak_answers", False))
+        # voice: talk to Clicky (offline), and lessons you can talk back to
+        from .voice import Voice
+
+        self.voice = Voice(config.config_dir())
+        self.lesson = {"active": False}
+        self.ask.talk.connect(self.talk)
+        self.ask.context_fn = self._lesson_context
+        self.ask.command_fn = self._typed_lesson_command
+        self.bridge.heard.connect(self._on_heard)
+        self.bridge.voiceLevel.connect(self.ask.mic.set_level)
+        self.bridge.voiceStatus.connect(lambda t: (self.ask.status.setWordWrap(True), self.ask.status.setText(t)))
+        own = lambda: [w for w in (self.ask, self.tile, self.bubble) if w is not None and w.isVisible()]  # noqa: E731
+        self.ghost.avoid_fn = lambda: [w.frameGeometry() for w in own() if w.windowOpacity() > 0.5]
+        self.ghost.own_windows_fn = lambda: [w for w in (self.ask, self.tile) if w is not None]
         self.screen.own_rects = self._own_rects
         if not self.selftest:
             for w in (self.ask, self.tile):
@@ -550,6 +564,103 @@ class App:
         if self.bubble:
             self.bubble.set_state("paused" if self.paused else "idle")
 
+    # ---- voice -------------------------------------------------------------------------------------------------------
+    def talk(self) -> None:
+        """Control + Space or the mic button: listen (again to stop). Everything stays on this Mac."""
+        import threading
+
+        from .voice import stop_speaking
+
+        if self.voice.recording:
+            self.voice.stop()
+            return
+        ok, why = self.voice.available()
+        if not ok:
+            self.ask.status.setText(why)
+            return
+        if self.ask and not self.ask.isVisible():
+            self.ask.toggle(self.bubble)
+        if not self.voice.model_ready():
+            self._get_voice()
+            return
+        stop_speaking()  # you're talking now
+        self.ask.set_listening(True)
+        threading.Thread(target=self._listen, daemon=True).start()
+
+    def _listen(self) -> None:
+        try:
+            text, err = self.voice.listen(on_level=self.bridge.voiceLevel.emit), ""
+        except Exception as exc:  # noqa: BLE001
+            text, err = "", str(exc)
+        self.bridge.heard.emit(text, err)
+
+    def _on_heard(self, text: str, err: str) -> None:
+        from .voice import lesson_command
+
+        if err:
+            self.ask.set_listening(False, f"Couldn't hear you: {err}")
+            return
+        if not text:
+            self.ask.set_listening(False, "I didn't catch that. Press the mic and try again.")
+            return
+        self.ask.set_listening(False, f"You said: “{text}”")
+        if self.lesson.get("active"):
+            cmd = lesson_command(text)
+            if cmd:  # "next", "repeat", "go back", "stop"
+                self.lesson["cmd"] = cmd
+                self.lesson["interrupt"].set()
+                self.ask.status.setText({"next": "Next step", "repeat": "Again", "back": "Going back",
+                                         "stop": "Stopping the lesson"}[cmd])
+                return
+        self.ask.send_text(text, voice=True)
+
+    def _typed_lesson_command(self, text: str) -> bool:
+        from .voice import lesson_command
+
+        if not self.lesson.get("active"):
+            return False
+        cmd = lesson_command(text)
+        if cmd:
+            self.lesson["cmd"] = cmd
+            self.lesson["interrupt"].set()
+            self.ask.status.setText({"next": "Next step", "repeat": "Again", "back": "Going back",
+                                     "stop": "Stopping the lesson"}[cmd])
+            return True
+        return False
+
+    def _lesson_context(self) -> str:
+        """While a lesson runs, questions are about the step you're on."""
+        ls = self.lesson
+        if not ls.get("active"):
+            return ""
+        return (f"(I'm in the lesson \"{ls.get('title')}\", on step {ls.get('step')} of {ls.get('total')}: "
+                f"\"{ls.get('say')}\". Answer briefly about this step.) ")
+
+    def _get_voice(self) -> None:
+        """First time: download Clicky's offline speech model (about 140 MB)."""
+        import threading
+
+        from PySide6.QtWidgets import QMessageBox
+
+        if getattr(self, "_voice_downloading", False):
+            return
+        if QMessageBox.question(None, "Talk to Clicky",
+                                "To understand your voice without sending it anywhere, Clicky needs its offline "
+                                "speech model (about 140 MB, once).\n\nDownload it now?") != QMessageBox.Yes:
+            return
+        self._voice_downloading = True
+
+        def work():
+            try:
+                self.voice.download_model(lambda pct: self.bridge.voiceStatus.emit(f"Getting Clicky's voice… {pct}%"))
+                self.bridge.voiceStatus.emit("Voice ready! Press the mic (or Control + Space) and talk.")
+            except Exception as exc:  # noqa: BLE001
+                self.bridge.voiceStatus.emit(f"Couldn't download the voice: {exc}")
+            finally:
+                self._voice_downloading = False
+
+        threading.Thread(target=work, daemon=True).start()
+
     def kill(self) -> None:
         """Ctrl+Alt+Esc: stop all watching and actions instantly and release control."""
         self._set_paused(True, from_pi=True)
@@ -588,6 +699,8 @@ class App:
                         self.kill()
                     elif code == 49 and flags & cmd and flags & shift:
                         self.bridge.toggleTile.emit()
+                    elif code == 49 and flags & ctrl and not flags & cmd and not flags & opt:
+                        self.talk()  # Control + Space: talk to Clicky
                 except Exception:  # noqa: BLE001
                     log.exception("hotkey handler")
 

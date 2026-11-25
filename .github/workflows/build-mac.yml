@@ -87,6 +87,24 @@ jobs:
           QT_QPA_PLATFORM=offscreen python packaging/make_icon.py packaging/Click.iconset
           iconutil -c icns packaging/Click.iconset -o packaging/Click.icns
 
+      - name: Build the offline speech engine (whisper.cpp)
+        run: |
+          # Talking to Clicky stays on the Mac: whisper.cpp turns speech into text locally.
+          git clone --depth 1 --branch v1.7.6 https://github.com/ggml-org/whisper.cpp "$RUNNER_TEMP/whisper.cpp"
+          extra=""
+          if [ "$(uname -m)" = "x86_64" ]; then
+            # portable build for Intel Macs (2015+): AVX2/FMA, no Metal
+            extra="-DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_METAL=OFF"
+          fi
+          cmake -S "$RUNNER_TEMP/whisper.cpp" -B "$RUNNER_TEMP/wbuild" -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 $extra
+          cmake --build "$RUNNER_TEMP/wbuild" --config Release -j 4 --target whisper-cli
+          mkdir -p packaging/bin
+          cp "$RUNNER_TEMP/wbuild/bin/whisper-cli" packaging/bin/whisper-cli
+          packaging/bin/whisper-cli --help > /dev/null 2>&1 || packaging/bin/whisper-cli -h | head -3
+          otool -L packaging/bin/whisper-cli
+
       - name: Build Click.app
         run: |
           pyinstaller --noconfirm --distpath dist --workpath build packaging/Click.spec

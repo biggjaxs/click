@@ -415,3 +415,16 @@ def test_show_me_how_runs_a_guided_lesson(services):
     assert g[2]["steps"][0]["app"] == "Mail"
     assert "How to send an email" in out["answer"] and "you did it" in out["answer"]
     assert sum(1 for e in rec.events if e["type"] == "token") == 2  # steps first, then the ending (no repeat)
+
+
+def test_question_during_a_lesson_is_about_that_step(services):
+    calls = _wire(services, {("screen", "find_ui_element"): {"matches": []}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "It's the pencil icon at the top."}]])
+    text = ('(I\'m in the lesson "How to send an email", on step 2 of 6: "Click here to start a new email.". '
+            'Answer briefly about this step.) what does this button do')
+    out = run(services.orchestrator.handle(send=Recorder(), text=text, conversation_id=None, upload_ids=[],
+                                           incognito_key=None, state=_state()))
+    assert out["answer"].startswith("It's the pencil")
+    assert not any(c[:2] in (("skills", "guide"), ("skills", "run")) for c in calls)  # no new lesson or task
+    first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
+    assert "step 2" in first["messages"][-1]["content"]

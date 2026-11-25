@@ -201,63 +201,96 @@ class Skills:
 
     # ---- guided lessons: "show me how to send an email" ---------------------------------------------------------
     async def guide(self, payload: dict) -> dict:
-        """Walk the user through a task: Clicky goes to each button with the step written beside it and waits
-        for them to click it. Nothing is clicked FOR them (except opening the app), so it's a real lesson."""
-        steps = (payload.get("steps") or [])[:10]
+        """Walk the user through a task: Clicky goes to each button with the step written beside it, says it out
+        loud, and waits for them to click it. They can say (or type) "next", "repeat", "go back", "stop", or ask
+        a question about the step at any time. Nothing is clicked FOR them (except opening the app)."""
+        import threading
+        import time as _time
+
+        from .voice import speak
+
+        steps = (payload.get("steps") or [])[:12]
         title = payload.get("title") or "Here's how"
         if not steps:
             raise SkillError("No steps to show.")
-        ghost = self.app.ghost
+        app, ghost = self.app, self.app.ghost
+        lesson = getattr(app, "lesson", None)
+        if lesson is None:
+            lesson = app.lesson = {}
+        lesson.update(active=True, title=title, total=len(steps), step=0, say="", cmd=None,
+                      interrupt=threading.Event())
+        talk = app.settings.get("lesson_voice", True)
         ghost.hold = True  # stay on screen during the lesson (no auto-hide)
-        done = 0
+        done, i = 0, 0
         try:
-            self.app.bridge.narrate.emit(title)
-            for i, st in enumerate(steps, 1):
-                if self.app.actions.killed.is_set():
+            app.bridge.narrate.emit(title)
+            if talk:
+                speak(f"{title}. Say next, repeat, go back, or ask me anything as we go.")
+            while 0 <= i < len(steps):
+                if app.actions.killed.is_set():
                     break
-                say = f"Step {i} of {len(steps)}: {st.get('say', '')}"
-                if st.get("app"):
-                    name = app_name(st["app"])
-                    await self._point(name, say, fallback_center=False)
-                    if sys.platform == "darwin":
-                        await asyncio.to_thread(subprocess.run, ["open", "-a", name], capture_output=True)
-                    elif sys.platform == "win32":
-                        await asyncio.to_thread(subprocess.run, ["cmd", "/c", "start", "", name], capture_output=True)
+                st = steps[i]
+                say = f"Step {i + 1} of {len(steps)}: {st.get('say', '')}"
+                lesson.update(step=i + 1, say=st.get("say", ""), cmd=None)
+                lesson["interrupt"].clear()
+                if talk:
+                    speak(f"Step {i + 1}. {st.get('say', '')}")
+                if st.get("app") or st.get("url"):
+                    if st.get("app"):
+                        name = app_name(st["app"])
+                        await self._point(name, say, fallback_center=False)
+                        opener = ["open", "-a", name] if sys.platform == "darwin" else ["cmd", "/c", "start", "", name]
+                    else:
+                        name = None
+                        opener = ["open", st["url"]] if sys.platform == "darwin" else ["cmd", "/c", "start", "", st["url"]]
+                    if sys.platform in ("darwin", "win32"):
+                        await asyncio.to_thread(subprocess.run, opener, capture_output=True)
                     await asyncio.sleep(1.5)
                     await self._point_at_front_window(say, name)
-                    await asyncio.sleep(2.2)
-                    done += 1
-                    continue
-                if st.get("url"):
-                    opener = ["open", st["url"]] if sys.platform == "darwin" else ["cmd", "/c", "start", "", st["url"]]
-                    await asyncio.to_thread(subprocess.run, opener, capture_output=True)
-                    await asyncio.sleep(1.5)
-                    await self._point_at_front_window(say)
-                    await asyncio.sleep(2.2)
-                    done += 1
-                    continue
-                el = None
-                if st.get("target"):
-                    for _ in range(3):  # the window may still be drawing: look a few times
-                        found = await asyncio.to_thread(self.app.screen.find_ui_element, st["target"], None, True)
-                        if found.get("matches"):
-                            el = found["matches"][0]
+                    await self._lesson_pause(lesson, 2.5)
+                else:
+                    el = None
+                    if st.get("target"):
+                        for _ in range(3):  # the window may still be drawing: look a few times
+                            found = await asyncio.to_thread(self.app.screen.find_ui_element, st["target"], None, True)
+                            if found.get("matches"):
+                                el = found["matches"][0]
+                                break
+                            await asyncio.sleep(0.8)
+                    if el:
+                        res = await self.app.actions.teach_step({"element_id": el["id"], "instruction": say,
+                                                                 "timeout": st.get("wait", 120),
+                                                                 "interrupt": lesson["interrupt"]})
+                        if res.get("status") == "stopped":
                             break
-                        await asyncio.sleep(0.8)
-                if el:
-                    res = await self.app.actions.teach_step({"element_id": el["id"], "instruction": say,
-                                                             "timeout": st.get("wait", 60)})
-                    if res.get("status") == "stopped":
-                        break
-                else:  # can't see it: explain beside the front window and give time to do it
-                    await self._point_at_front_window(say)
-                    await asyncio.sleep(float(st.get("wait_text", 7)))
-                done += 1
-                ghost.last_active = __import__("time").time()
-            self.app.bridge.narrate.emit("That's it! You did it.")
+                    else:  # can't see it: explain beside the front window and give time to do it
+                        await self._point_at_front_window(say)
+                        await self._lesson_pause(lesson, float(st.get("wait_text", 9)))
+                ghost.last_active = _time.time()
+                cmd = lesson.get("cmd")
+                if cmd == "stop":
+                    break
+                if cmd == "repeat":
+                    continue
+                if cmd == "back":
+                    i = max(0, i - 1)
+                    continue
+                done = max(done, i + 1)
+                i += 1
+            finished = done == len(steps)
+            app.bridge.narrate.emit("That's it! You did it." if finished else "Lesson stopped.")
+            if talk:
+                speak("That's it! You did it." if finished else "Okay, stopping the lesson.")
         finally:
             ghost.hold = False
+            lesson["active"] = False
         return {"status": "done", "steps_done": done, "steps": len(steps)}
+
+    async def _lesson_pause(self, lesson: dict, seconds: float) -> None:
+        """Wait while they do the step (ends early if they say next/back/repeat/stop)."""
+        end = __import__("time").time() + seconds
+        while __import__("time").time() < end and not lesson["interrupt"].is_set():
+            await asyncio.sleep(0.1)
 
     # ---- helpers ------------------------------------------------------------------------------------------
     async def _point(self, query: str, label: str, fallback_center: bool = True) -> bool:

@@ -59,6 +59,7 @@ class _Link(QObject):
 
 class QuickAsk(QWidget):
     open_full = Signal()
+    talk = Signal()  # the mic button
 
     def __init__(self, url: str, accent: str = "#6d5dfc"):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
@@ -109,6 +110,11 @@ class QuickAsk(QWidget):
         self._typing.timeout.connect(lambda: self.busy or self.link.send(
             {"type": "typing", "text": self.input.text(), "conversation_id": self.conversation_id}))
         self.input.textEdited.connect(self._edited)
+        self.mic = MicButton(accent)
+        self.mic.setToolTip("Talk to Clicky (Control + Space)")
+        self.mic.clicked.connect(self.talk.emit)
+        self._voice_turn = False
+        self.context_fn = lambda: ""  # set by the app: what lesson step you're on, so questions make sense
         self.input.setStyleSheet(
             "QLineEdit { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
             f" border-radius: 12px; padding: 10px 12px; font-size: 14px; selection-background-color: {accent}; }}"
@@ -143,7 +149,11 @@ class QuickAsk(QWidget):
         foot.addStretch()
         foot.addWidget(self.new)
         foot.addWidget(self.full)
-        lay.addWidget(self.input)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(self.input, 1)
+        row.addWidget(self.mic)
+        lay.addLayout(row)
         lay.addWidget(self.chips)
         lay.addWidget(self.scroll)
         lay.addLayout(self.actions)
@@ -219,14 +229,34 @@ class QuickAsk(QWidget):
         self.adjustSize()
         self.input.setFocus()
 
+    def send_text(self, text: str, voice: bool = False):
+        """Ask something as if typed (used for voice): the answer is spoken back when voice=True."""
+        self.input.setText(text)
+        self._voice_turn = voice
+        self._send()
+
+    def set_listening(self, on: bool, note: str = ""):
+        self.mic.set_on(on)
+        if on:
+            self.input.setPlaceholderText("Listening… just talk")
+            self.status.setText(note or "Listening… (stops when you stop talking)")
+        else:
+            self.input.setPlaceholderText("Ask Click anything…")
+            if note:
+                self.status.setText(note)
+
     def _send(self):
         text = self.input.text().strip()
         if not text:
             return
+        if getattr(self, "command_fn", lambda t: False)(text):  # "next" / "repeat" / "back" / "stop" in a lesson
+            self.input.clear()
+            return
         if self.busy:
             self.status.setText("Still answering the last question… press Enter again in a moment.")
             return
-        if not self.link.send({"type": "send", "text": text, "conversation_id": self.conversation_id, "uploads": []}):
+        sent = (self.context_fn() or "") + text  # e.g. "(I'm on step 2 of the lesson ...) where is that?"
+        if not self.link.send({"type": "send", "text": sent, "conversation_id": self.conversation_id, "uploads": []}):
             self.status.setText("Not connected yet. Try again in a moment.")
             return
         self.busy = True
@@ -299,9 +329,59 @@ class QuickAsk(QWidget):
             self.status.setText(f"Answered in {ms / 1000:.1f} s" if ms else "Ready")
             if not self.answer.strip():
                 self.out.setText("(No answer. Open the full chat for details.)")
-            elif getattr(self, "speak_enabled", lambda: False)():
-                speak(self.answer)
+            elif self._voice_turn or getattr(self, "speak_enabled", lambda: False)():
+                from .voice import speak as say_it
+
+                say_it(self.answer)  # you asked out loud: Clicky answers out loud
+            self._voice_turn = False
             self.adjustSize()
+
+
+class MicButton(QPushButton):
+    """A round microphone button that glows while Clicky is listening."""
+
+    def __init__(self, accent: str):
+        super().__init__()
+        self.accent = accent
+        self.on = False
+        self.level = 0.0
+        self.setFixedSize(38, 38)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet("QPushButton { border: none; background: transparent; }")
+
+    def set_on(self, on: bool):
+        self.on = on
+        self.level = 0.0
+        self.update()
+
+    def set_level(self, lvl: float):
+        self.level = lvl
+        self.update()
+
+    def paintEvent(self, _):
+        from PySide6.QtCore import QPointF, QRectF
+        from PySide6.QtGui import QColor, QPen
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        c = QPointF(19, 19)
+        bg = QColor(self.accent if self.on else "#2a2a33")
+        if self.on:
+            glow = QColor(self.accent)
+            glow.setAlpha(int(60 + 120 * self.level))
+            p.setPen(Qt.NoPen)
+            p.setBrush(glow)
+            p.drawEllipse(c, 18, 18)
+        p.setPen(Qt.NoPen)
+        p.setBrush(bg if self.on else QColor(255, 255, 255, 26))
+        p.drawEllipse(c, 15, 15)
+        pen = QPen(QColor("white"), 1.8)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(15.5, 10, 7, 12), 3.5, 3.5)          # the mic
+        p.drawArc(QRectF(12.5, 14, 13, 11), 200 * 16, 140 * 16)        # its stand
+        p.drawLine(QPointF(19, 25), QPointF(19, 28))
+        p.end()
 
 
 _say = None

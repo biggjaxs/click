@@ -18,6 +18,9 @@ datas = [
     (str(Path(SPECPATH) / "entitlements.plist"), "."),  # used when each Mac stamps Click with its own signature
 ]
 binaries = []
+_whisper = Path(SPECPATH) / "bin" / "whisper-cli"  # offline speech engine, built by the workflow
+if _whisper.exists():
+    binaries.append((str(_whisper), "bin"))
 hiddenimports = (
     ["app.main", "click_protocol", "click_protocol.tls"]
     + collect_submodules("app")
@@ -91,7 +94,9 @@ app = BUNDLE(
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": True,
         "NSRequiresAquaSystemAppearance": False,   # follows light/dark mode
-        "NSAppleEventsUsageDescription": "Click opens System Settings to help you grant permissions.",
+        "NSAppleEventsUsageDescription": "Click opens apps and makes notes, reminders and emails when you ask.",
+        "NSMicrophoneUsageDescription": "So you can talk to Clicky. Your voice is turned into text on this Mac "
+                                        "and is never sent anywhere.",
         "NSLocalNetworkUsageDescription": "Click connects to your Click box (Raspberry Pi) on your home network.",
         "NSBonjourServices": ["_click._tcp"],
     },

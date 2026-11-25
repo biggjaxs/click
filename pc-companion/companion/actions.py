@@ -23,14 +23,15 @@ log = logging.getLogger("click.actions")
 
 
 
-def _wait_for_click_mac(area: Rect, timeout: float, killed) -> bool:
-    """True when the user clicks inside `area` (with a little margin) before `timeout` seconds."""
+def _wait_for_click_mac(area: Rect, timeout: float, killed, interrupt=None) -> bool:
+    """True when the user clicks inside `area` (with a little margin) before `timeout` seconds.
+    `interrupt` (an Event) ends the wait early, e.g. when they say "next" or "go back" during a lesson."""
     import Quartz
 
     box = Rect(area.x - 12, area.y - 12, area.w + 24, area.h + 24)
     end = time.time() + timeout
     was_down = False
-    while time.time() < end and not killed.is_set():
+    while time.time() < end and not killed.is_set() and not (interrupt and interrupt.is_set()):
         down = Quartz.CGEventSourceButtonState(Quartz.kCGEventSourceStateCombinedSessionState, 0)
         if down and not was_down:
             loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
@@ -163,7 +164,8 @@ class Actions:
         if sys.platform == "darwin":
             # watch for the click by asking macOS where the mouse is and whether it's pressed (safe from any
             # thread, needs no extra permission)
-            got = await asyncio.to_thread(_wait_for_click_mac, area, float(a.get("timeout", 90)), self.killed)
+            got = await asyncio.to_thread(_wait_for_click_mac, area, float(a.get("timeout", 90)), self.killed,
+                                          a.get("interrupt"))
             if got:
                 return {"status": "user_clicked", "element": name}
             return {"status": "stopped" if self.killed.is_set() else "timeout",
@@ -183,8 +185,8 @@ class Actions:
         except Exception:  # noqa: BLE001 - listener not permitted (macOS input monitoring)
             return {"status": "pointing", "note": "Couldn't watch for your click; say 'next' when done."}
         try:
-            for _ in range(900):  # up to 90 s
-                if clicked.is_set() or self.killed.is_set():
+            for _ in range(int(float(a.get("timeout", 90)) * 10)):
+                if clicked.is_set() or self.killed.is_set() or (a.get("interrupt") and a["interrupt"].is_set()):
                     break
                 await asyncio.sleep(0.1)
         finally:
