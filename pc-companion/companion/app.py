@@ -865,10 +865,12 @@ def _finish_install() -> None:
 
     if Signer.signed_by_us(me):
         return
+    from . import __version__
+
     tried = config.config_dir() / "install-attempt"
-    if tried.exists() and _t.time() - tried.stat().st_mtime < 300:
-        return  # tried a moment ago and it didn't take: just run as-is rather than loop
-    tried.write_text(str(me))
+    if tried.exists() and tried.read_text().strip() == __version__:
+        return  # already tried for this version (e.g. the password box was cancelled): never nag or loop
+    tried.write_text(__version__)
     staging = me.with_name(".Click-installing.app")
     try:
         subprocess.run(["rm", "-rf", str(staging)], timeout=60)

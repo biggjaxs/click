@@ -29,6 +29,7 @@ class Signer:
         self.folder = Path(folder)
         self.keychain = self.folder / "click-signing.keychain-db"
         self.pw_file = self.folder / "click-signing.key"
+        self.cert_file = self.folder / "click-signing-cert.pem"
 
     # ---- the identity (made once per Mac) ----------------------------------------------------------------
     def _password(self) -> str:
@@ -48,6 +49,7 @@ class Signer:
         _run("security", "unlock-keychain", "-p", pw, str(self.keychain))
         found = self._find()
         if found:
+            self._ensure_trusted()
             return found
         tmp = Path(tempfile.mkdtemp())
         try:
@@ -67,12 +69,37 @@ class Signer:
                 raise RuntimeError(f"couldn't store the signing key: {r.stderr.strip()[:200]}")
             _run("security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s", "-k", pw,
                  str(self.keychain))
+            shutil.copy(cert, self.cert_file)  # the public half (not secret), needed to trust it
         finally:
             shutil.rmtree(tmp, ignore_errors=True)  # the key now only lives in Click's private keychain
         found = self._find()
         if not found:
             raise RuntimeError("the signing key was made but can't be found")
+        self._ensure_trusted()
         return found
+
+    def _valid(self) -> bool:
+        r = _run("security", "find-identity", "-v", "-p", "codesigning", str(self.keychain))
+        return NAME in r.stdout
+
+    def _ensure_trusted(self) -> None:
+        """macOS only signs with a key it trusts. Trusting this Mac's own key needs the Mac's password once
+        (the standard macOS password box); after that every update is signed silently."""
+        if self._valid():
+            return
+        if not self.cert_file.exists():
+            raise RuntimeError("the signing certificate is missing")
+        args = ["security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign",
+                "-k", "/Library/Keychains/System.keychain", str(self.cert_file)]
+        if os.environ.get("CI"):
+            r = _run("sudo", *args)
+        else:
+            cmd = " ".join("'" + a.replace("'", "'\\''") + "'" for a in args)
+            prompt = "Click needs your password once, so future updates keep their permissions."
+            r = _run("osascript", "-e", f'do shell script "{cmd}" with prompt "{prompt}" with administrator privileges',
+                     timeout=300)
+        if r.returncode or not self._valid():
+            raise RuntimeError("the signing key wasn't trusted (password box cancelled?)")
 
     def _find(self) -> str | None:
         r = _run("security", "find-identity", "-p", "codesigning", str(self.keychain))
