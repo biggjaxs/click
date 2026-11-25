@@ -135,7 +135,12 @@ jobs:
       - name: Make the .dmg
         run: |
           mkdir -p dmg && cp -R dist/Click.app dmg/ && ln -s /Applications dmg/Applications
-          hdiutil create -volname "Click" -srcfolder dmg -ov -format UDZO "Click-${{ matrix.name }}.dmg"
+          # hdiutil sometimes fails with "Resource busy" on GitHub's Macs; retry a few times
+          for i in 1 2 3 4 5; do
+            hdiutil create -volname "Click" -srcfolder dmg -ov -format UDZO "Click-${{ matrix.name }}.dmg" && break
+            echo "hdiutil busy, retrying ($i)"; sleep $((i * 5))
+          done
+          test -f "Click-${{ matrix.name }}.dmg"
           ls -lh "Click-${{ matrix.name }}.dmg"
 
       - uses: actions/upload-artifact@v4
