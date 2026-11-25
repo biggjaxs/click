@@ -1,0 +1,32 @@
+# Quick check (about a minute) that a Mac can make its own signing key and stamp an app with it.
+name: Test self-signing
+on:
+  push:
+    paths: ["pc-companion/companion/selfsign.py", ".github/workflows/test-selfsign.yml"]
+  workflow_dispatch:
+jobs:
+  selfsign:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sign a copy of an app with a brand-new local key
+        run: |
+          ditto /System/Applications/Calculator.app "$RUNNER_TEMP/Test.app"
+          cd pc-companion
+          python3 - <<'PY'
+          import os, sys, tempfile
+          from pathlib import Path
+          sys.path.insert(0, ".")
+          import importlib.util
+          spec = importlib.util.spec_from_file_location("selfsign", "companion/selfsign.py")
+          m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          app = Path(os.environ["RUNNER_TEMP"]) / "Test.app"
+          s = m.Signer(Path(tempfile.mkdtemp()))
+          print("identity:", s.identity())
+          s.sign(app)
+          print("signed by us:", m.Signer.signed_by_us(app))
+          assert m.Signer.signed_by_us(app)
+          s.sign(app)  # a second time (next update) reuses the same key
+          print("SELFSIGN QUICK OK")
+          PY
+          codesign -dvv "$RUNNER_TEMP/Test.app" 2>&1 | grep -E "Authority|Identifier"

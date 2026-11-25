@@ -109,7 +109,16 @@ class Signer:
         ent = self._entitlements(app)
         if ent:
             cmd += ["--options", "runtime", "--entitlements", str(ent)]
-        r = _run(*cmd, str(app), timeout=600)
+        # codesign only finds keys in keychains on the search list: add Click's for a moment
+        before = [ln.strip().strip('"') for ln in _run("security", "list-keychains", "-d", "user").stdout.splitlines()
+                  if ln.strip()]
+        if str(self.keychain) not in before:
+            _run("security", "list-keychains", "-d", "user", "-s", *before, str(self.keychain))
+        try:
+            r = _run(*cmd, str(app), timeout=600)
+        finally:
+            if str(self.keychain) not in before and before:
+                _run("security", "list-keychains", "-d", "user", "-s", *before)
         if r.returncode:
             raise RuntimeError(f"signing failed: {r.stderr.strip()[-300:]}")
         r = _run("codesign", "--verify", "--deep", str(app))
