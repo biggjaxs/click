@@ -1,11 +1,15 @@
-# Click's signing certificate
+# How Click is signed
 
-A self-made code-signing certificate ("Click Code Signing"). Every Mac build is signed with it so
-macOS sees each new version as the **same app** and keeps its permissions (Screen Recording,
-Accessibility, Input Monitoring) across updates. It does NOT make macOS trust the app (that needs
-Apple's paid Developer ID), so the first open still needs "Open Anyway".
+No signing key is stored in this repository or in GitHub.
 
-**Security note:** the private key is in `click-signing.p12` (password `click`) because this repo
-is private and this session can't set GitHub secrets. Anyone who can read this repo could sign an
-app that macOS treats as Click. Before going public: move it to a GitHub Actions secret, or better,
-switch to an Apple Developer ID certificate.
+macOS remembers an app's permissions (Screen Recording, Accessibility) by its signature. So that every
+update keeps those permissions, **each Mac stamps Click with its own signing key**: the first time Click is
+installed, it creates a key that only exists on that Mac (in a private keychain inside
+`~/Library/Application Support/ClickCompanion/`), and signs each new version with it when it is moved into
+Applications. See `pc-companion/companion/selfsign.py`.
+
+The build itself is signed ad-hoc. Gatekeeper still shows "Open Anyway" the first time, until Click is
+signed with Apple's paid Developer ID.
+
+An older shared key ("Click Code Signing") was used by earlier builds. It is retired; Click resets the
+permissions that were granted to it once, so it can't be used to get them.

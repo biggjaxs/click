@@ -9,6 +9,7 @@ import logging
 import socket
 import sys
 import time
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
 
@@ -37,6 +38,7 @@ class App:
         self.qt.setApplicationName("Click")
         if "--selftest" not in sys.argv:
             _move_to_applications()   # opened from the download / disk image: offer to install properly
+            _finish_install()         # stamp this version with this Mac's own signature (keeps permissions)
             _close_other_copies()     # an older Click still running from somewhere else: close it
         if _already_running():
             sys.exit(0)  # the running Click was asked to show itself
@@ -823,6 +825,67 @@ def _close_other_copies() -> None:
                 pass
 
 
+def _sign_copy(app) -> bool:
+    """Stamp an installed copy with this Mac's own signature (see selfsign.py). Never blocks Click."""
+    try:
+        from .selfsign import Signer
+
+        Signer(config.config_dir()).sign(app)
+        _reset_old_permissions()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("click").warning("couldn't sign Click on this Mac: %s", exc)
+        return False
+
+
+def _reset_old_permissions() -> None:
+    """Once: forget permissions granted to builds with the old shared signature, so that signature
+    (which is now public) can never be used to get them. Click asks again with its new signature."""
+    marker = config.config_dir() / "permissions-reset-v2"
+    if marker.exists():
+        return
+    import subprocess
+
+    for service in ("ScreenCapture", "Accessibility"):
+        subprocess.run(["tccutil", "reset", service, "app.click.assistant"], capture_output=True, timeout=15)
+    marker.write_text("done")
+
+
+def _finish_install() -> None:
+    """Running from Applications but not yet stamped with this Mac's signature (a fresh download):
+    make a stamped copy, swap it in after Click quits, and reopen. Takes a few seconds, once per update."""
+    import os
+    import subprocess
+    import time as _t
+
+    me = _bundle_path()
+    if not me or not str(me).startswith("/Applications/"):
+        return
+    from .selfsign import Signer
+
+    if Signer.signed_by_us(me):
+        return
+    tried = config.config_dir() / "install-attempt"
+    if tried.exists() and _t.time() - tried.stat().st_mtime < 300:
+        return  # tried a moment ago and it didn't take: just run as-is rather than loop
+    tried.write_text(str(me))
+    staging = me.with_name(".Click-installing.app")
+    try:
+        subprocess.run(["rm", "-rf", str(staging)], timeout=60)
+        subprocess.run(["ditto", str(me), str(staging)], check=True, timeout=300)
+        if not _sign_copy(staging):
+            subprocess.run(["rm", "-rf", str(staging)], timeout=60)
+            return
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("click").warning("finishing install failed: %s", exc)
+        return
+    swap = (f'while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.3; done; '
+            f'rm -rf "{me}" && mv "{staging}" "{me}" && open "{me}"')
+    subprocess.Popen(["/bin/sh", "-c", swap], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    sys.exit(0)
+
+
 def _move_to_applications() -> None:
     """Opened from the disk image, Downloads or anywhere outside Applications: offer to move Click into
     Applications (replacing any old copy) and reopen from there. macOS's "Quit & Reopen" after granting
@@ -850,6 +913,7 @@ def _move_to_applications() -> None:
         if shutil.os.path.exists(dest):
             shutil.rmtree(dest)
         subprocess.run(["ditto", str(me), dest], check=True, timeout=300)
+        _sign_copy(Path(dest))
         subprocess.run(["open", "-n", dest], timeout=30)
     except Exception as exc:  # noqa: BLE001
         QMessageBox.warning(None, "Couldn't move Click",
@@ -944,6 +1008,10 @@ _crash_file = None
 
 
 def main() -> int:
+    if "--selftest-sign" in sys.argv:  # build check: can this Mac stamp Click with its own signature?
+        from .selfsign import selftest
+
+        return selftest(_bundle_path())
     _webengine_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                         handlers=[logging.StreamHandler(),

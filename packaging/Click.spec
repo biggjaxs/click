@@ -15,6 +15,7 @@ SHARED = ROOT / "shared"
 datas = [
     (str(HUB / "app" / "static"), "app/static"),
     (str(HUB / "config"), "config"),
+    (str(Path(SPECPATH) / "entitlements.plist"), "."),  # used when each Mac stamps Click with its own signature
 ]
 binaries = []
 hiddenimports = (
@@ -67,7 +68,7 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [], exclude_binaries=True, name="Click", debug=False, strip=False, upx=False,
     console=False, argv_emulation=False, target_arch=None,
-    codesign_identity=os.environ.get("CLICK_SIGN_ID") or None,  # same identity every build -> permissions stick
+    codesign_identity=None,  # signed here only temporarily; each Mac stamps Click with its own key (selfsign.py)
     entitlements_file=str(Path(SPECPATH) / "entitlements.plist"),
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Click")
