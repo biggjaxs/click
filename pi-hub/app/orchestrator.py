@@ -825,6 +825,7 @@ class Orchestrator:
             return False
         if (quickmath.solve(t) or REMEMBER_RE.match(t) or FORGET_RE.match(t) or mentions_clicky(t) or BRIEFING_RE.match(t)
                 or RECALL_RE.search(t) or RECORD_RE.match(t) or SKILLS_LIST_RE.match(t) or EXPORT_RE.match(t)
+                or guides.find(t) or t.startswith("(I'm in the lesson") or t.startswith("Help me with this pop-up")
                 or (getattr(self, "recording", False) and STOP_REC_RE.match(t))
                 or language.plan(t) or language.looks_like_command(t) or point_target(t) or SCREEN_INTENT.search(t)):
             return False

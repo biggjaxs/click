@@ -540,3 +540,11 @@ def test_teach_once_record_list_and_do(services):
     assert "Saved **export report** (2 steps)" in out and len(calls) > calls_before
     out = say("do export report")
     assert out == "Done: export report." and any(c[:2] == ("skills", "replay") for c in calls)
+
+
+def test_lesson_questions_are_never_pre_answered_while_typing(services):
+    _wire(services, {})
+    o = services.orchestrator
+    assert not o._speculable("how do I add a cube in blender")
+    assert not o._speculable("show me how to send an email")
+    assert o._speculable("why is the sky blue")
