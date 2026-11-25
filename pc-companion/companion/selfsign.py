@@ -150,7 +150,9 @@ class Signer:
                         + _run("security", "find-identity", "-v", "-p", "codesigning").stdout.strip() + " || "
                         + _run("security", "find-identity", "-p", "codesigning", str(self.keychain)).stdout.strip())
                 log.warning("signing diagnostics: %s", diag)
-                print("DIAG:", diag)
+                print("DIAG:", diag.replace("\n", " ¶ "))
+                r2 = _run("codesign", "--force", "-s", ident, "--keychain", str(self.keychain), "-v", str(app))
+                print("DIAG retry:", r2.returncode, r2.stderr.replace("\n", " ¶ ")[-400:])
         finally:
             if str(self.keychain) not in before and before:
                 _run("security", "list-keychains", "-d", "user", "-s", *before)
