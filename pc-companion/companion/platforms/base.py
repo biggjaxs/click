@@ -81,8 +81,8 @@ class Platform:
         """True if the keyboard focus is in a password / secure field."""
         return False
 
-    def configure_overlay(self, widget) -> None:
-        """Make Click's cursor window float above all apps (and full-screen apps) and ignore clicks."""
+    def configure_overlay(self, widget, click_through: bool = True) -> None:
+        """Make a Click window float above all apps (and full-screen apps); optionally let clicks pass through."""
 
     def exclude_from_capture(self, widget) -> None:
         """Hide Click's own overlay windows from screenshots."""

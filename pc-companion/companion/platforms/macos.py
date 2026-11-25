@@ -140,7 +140,7 @@ class MacPlatform(Platform):
         except Exception:  # noqa: BLE001 - if we can't tell, be safe
             return True
 
-    def configure_overlay(self, widget) -> None:
+    def configure_overlay(self, widget, click_through: bool = True) -> None:
         """Qt's "stay on top" isn't enough on macOS: other apps, full-screen apps and other Spaces
         would hide the cursor. Raise it to the status-bar level and show it on every Space."""
         if not _real_display():
@@ -152,7 +152,7 @@ class MacPlatform(Platform):
             win.setLevel_(101)                 # kCGPopUpMenuWindowLevel: above normal and floating windows
             # canJoinAllSpaces | stationary | ignoresCycle | fullScreenAuxiliary
             win.setCollectionBehavior_((1 << 0) | (1 << 4) | (1 << 6) | (1 << 8))
-            win.setIgnoresMouseEvents_(True)
+            win.setIgnoresMouseEvents_(bool(click_through))  # the orb must stay clickable
             win.setHasShadow_(False)
             win.orderFrontRegardless()
         except Exception:  # noqa: BLE001

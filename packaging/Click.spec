@@ -1,6 +1,7 @@
 # PyInstaller recipe for Click.app (macOS). Built by .github/workflows/build-mac.yml:
 #   pyinstaller --noconfirm packaging/Click.spec
 # The app contains everything: the chat tile, the "box" part (hub) and the computer part (companion).
+import os
 import sys
 from pathlib import Path
 
@@ -65,7 +66,8 @@ a = Analysis(
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [], exclude_binaries=True, name="Click", debug=False, strip=False, upx=False,
-    console=False, argv_emulation=False, target_arch=None, codesign_identity=None,
+    console=False, argv_emulation=False, target_arch=None,
+    codesign_identity=os.environ.get("CLICK_SIGN_ID") or None,  # same identity every build -> permissions stick
     entitlements_file=str(Path(SPECPATH) / "entitlements.plist"),
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Click")

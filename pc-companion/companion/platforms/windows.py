@@ -148,7 +148,7 @@ class WindowsPlatform(Platform):
         except Exception:  # noqa: BLE001 - if we can't tell, be safe
             return True
 
-    def configure_overlay(self, widget) -> None:
+    def configure_overlay(self, widget, click_through: bool = True) -> None:
         HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_NOACTIVATE = -1, 0x2, 0x1, 0x10
         try:
             user32.SetWindowPos(wt.HWND(int(widget.winId())), wt.HWND(HWND_TOPMOST), 0, 0, 0, 0,

@@ -198,6 +198,14 @@ class SetupView(QWidget):
             self.bar.setValue(int(frac * 1000))
         self.detail.setText(detail)
 
+    def add_recheck(self, fn):
+        if getattr(self, "_recheck", None):
+            return
+        self._recheck = QPushButton("Check again")
+        self._recheck.setCursor(Qt.PointingHandCursor)
+        self._recheck.clicked.connect(fn)
+        self.layout().insertWidget(self.layout().count() - 1, self._recheck)
+
     def show_permissions(self, rows: list[tuple[str, str, bool, object]]):
         """rows: (name, why, granted, open_settings_callable)"""
         while self.perm_box.count():
@@ -276,6 +284,9 @@ class Tile(QWidget):
         self.web.setPage(Page(profile, self.web))
         self.web.page().setBackgroundColor(QColor(bg))
         self.web.loadFinished.connect(self._loaded)
+        self.web.page().renderProcessTerminated.connect(
+            lambda status, code: __import__("logging").getLogger("click.tile").error(
+                "chat window renderer stopped: %s (exit %s)", status, code))
         self.stack.addWidget(self.web)
         self._tries = 0
         self._want_chat = False
@@ -364,10 +375,10 @@ class Tile(QWidget):
             return
         self._tries += 1
         self.stack.setCurrentWidget(self.setup)
-        if self._tries == 40:  # about a minute: say so plainly, but keep trying
-            self.setup.title.setText("Click is taking longer than usual")
-            self.setup.sub.setText("Still trying. If this doesn't clear up, quit Click from the menu bar icon and "
-                                   "open it again. Details are in ~/Library/Application Support/ClickCompanion/companion.log")
+        if self._tries in (8, 40):  # say plainly what's wrong, but keep trying
+            self.setup.title.setText("The full chat window can't load yet")
+            self.setup.sub.setText(_diagnose(self.url) + "\n\nYou can still chat: click the orb in the top-right "
+                                   "to open Ask Click. Details: ~/Library/Application Support/ClickCompanion/companion.log")
         QTimer.singleShot(1500, self._load)
 
     def show_setup(self):
@@ -387,6 +398,20 @@ class Tile(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         QTimer.singleShot(0, self.moved.emit)
+
+
+def _diagnose(url: str) -> str:
+    import logging
+
+    import httpx
+
+    try:
+        httpx.get(url + "/api/status", timeout=3).raise_for_status()
+        msg = "Click's chat part is running, but this window couldn't display it (a web view problem)."
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Click's chat part isn't answering ({exc.__class__.__name__}). It restarts itself automatically."
+    logging.getLogger("click.tile").warning("chat window not loading: %s", msg)
+    return msg
 
 
 def _mac_round_and_float(widget, pinned: bool) -> None:

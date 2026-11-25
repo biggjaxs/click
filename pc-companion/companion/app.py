@@ -63,7 +63,7 @@ class App:
 
         self.bridge.confirmRequest.connect(show_confirm)
         self.bridge.notify.connect(self._show_message)
-        self.bridge.toggleTile.connect(self.toggle_tile)
+        self.bridge.toggleTile.connect(lambda: self.toggle_ask() if getattr(self, "ask", None) else self.toggle_tile())
         self.tray = Tray(self)
         self.selftest = "--selftest" in sys.argv
         self._start_hotkeys()
@@ -71,6 +71,7 @@ class App:
             self.platform.request_permissions()
         self.server.start()
         self.tile = None
+        self.ask = None
         self.bubble = None
         self.hub = None
         self.busy = 0
@@ -106,12 +107,12 @@ class App:
         from .tile import Tile
 
         self.bubble = LiquidBubble(self.settings["cursor"]["color"])
-        self.bubble.clicked.connect(self.toggle_tile)
+        self.bubble.clicked.connect(self.toggle_ask)
         self.bubble.moved.connect(self._tile_moved)
         self.bubble.set_state("starting")
         if not self.selftest:
             self.bubble.show()
-            self.platform.configure_overlay(self.bubble)  # float above every app and Space
+            self.platform.configure_overlay(self.bubble, click_through=False)  # float above every app, still clickable
         url = f"http://{self.settings['pi_host']}"
         self.tile = Tile(url, str(config_dir() / "web"), self.settings["cursor"]["color"])
         self.tile.place_under(self.bubble)
@@ -127,6 +128,10 @@ class App:
                 self.settings.set("pi_cert_pem", cert)
                 self.server.restart_tls()
             self.tile.url = self.hub.url
+        from .quickask import QuickAsk
+
+        self.ask = QuickAsk(self.tile.url, self.settings["cursor"]["color"])
+        self.ask.open_full.connect(lambda: (self.ask.hide(), self.toggle_tile() if not self.tile.isVisible() else None))
         self._watchdog = QTimer()
         self._watchdog.timeout.connect(self._watch)
         self._watchdog.start(1000)
@@ -139,6 +144,15 @@ class App:
         else:
             self.tile.show_tile()
             self._run_setup()
+
+    def toggle_ask(self) -> None:
+        """Clicking the orb opens the Ask panel (or the setup screen until Click is ready)."""
+        if not self.settings.get("setup_done") and self.tile:
+            self.toggle_tile()
+            return
+        if self.tile and self.tile.isVisible():
+            self.tile.hide_tile()
+        self.ask.toggle(self.bubble)
 
     def toggle_tile(self) -> None:
         if not self.tile:
@@ -198,6 +212,11 @@ class App:
             view.sub.setText("Everything runs privately on this computer.")
             rows = mac_permission_rows(self.platform)
             view.show_permissions(rows)
+            if rows and not all(r[2] for r in rows):
+                view.sub.setText("Turn on Click in each list below. If you just turned one on, press Check again; "
+                                 "if it still shows as off, quit Click from the menu bar and open it again "
+                                 "(macOS only notices some permissions after a restart).")
+                view.add_recheck(lambda: view.show_permissions(mac_permission_rows(self.platform)))
             view.cont.setText("Start using Click")
             view.cont.show()
             self._on_continue(self._finish_setup)
@@ -551,7 +570,22 @@ def _hide_dock_icon() -> None:
             pass
 
 
+def _webengine_env() -> None:
+    import os
+
+    flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    # The chat page is served from this computer; never send it through a system proxy or VPN.
+    flags += " --no-proxy-server"
+    if getattr(sys, "frozen", False):
+        # Chromium's sandbox helper often fails inside a packaged (unnotarized) app and the page never
+        # loads. The page is Click's own local chat, so it's safe to run without it.
+        flags += " --no-sandbox"
+        os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = flags.strip()
+
+
 def main() -> int:
+    _webengine_env()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                         handlers=[logging.StreamHandler(),
                                   logging.FileHandler(config.config_dir() / "companion.log", encoding="utf-8")])

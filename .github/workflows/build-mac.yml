@@ -87,8 +87,25 @@ jobs:
           QT_QPA_PLATFORM=offscreen python packaging/make_icon.py packaging/Click.iconset
           iconutil -c icns packaging/Click.iconset -o packaging/Click.icns
 
+      - name: Load Click's signing certificate
+        run: |
+          KC="$RUNNER_TEMP/click.keychain-db"
+          security create-keychain -p ci "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p ci "$KC"
+          security import packaging/signing/click-signing.p12 -k "$KC" -P click -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain \
+            packaging/signing/cert.pem || echo "trust step skipped"
+          ID=$(security find-identity -p codesigning "$KC" | awk '/Click Code Signing/ {print $2; exit}')
+          echo "Signing identity: $ID"
+          echo "CLICK_SIGN_ID=$ID" >> "$GITHUB_ENV"
+
       - name: Build Click.app
-        run: pyinstaller --noconfirm --distpath dist --workpath build packaging/Click.spec
+        run: |
+          pyinstaller --noconfirm --distpath dist --workpath build packaging/Click.spec
+          codesign -dvv dist/Click.app 2>&1 | grep -E "Authority|Identifier" || true
 
       - name: Self-test the finished app
         run: |
