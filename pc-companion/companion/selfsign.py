@@ -140,7 +140,9 @@ class Signer:
         before = [ln.strip().strip('"') for ln in _run("security", "list-keychains", "-d", "user").stdout.splitlines()
                   if ln.strip()]
         if str(self.keychain) not in before:
-            _run("security", "list-keychains", "-d", "user", "-s", *before, str(self.keychain))
+            r0 = _run("security", "list-keychains", "-d", "user", "-s", str(self.keychain), *before)
+            if r0.returncode:
+                print("DIAG list-keychains:", r0.returncode, r0.stderr.strip())
         try:
             r = _run(*cmd, str(app), timeout=600)
             if r.returncode:
