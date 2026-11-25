@@ -93,6 +93,9 @@ class Platform:
         """True if the keyboard focus is in a password / secure field."""
         return False
 
+    def raise_overlay(self, widget) -> None:
+        widget.raise_()
+
     def configure_overlay(self, widget, click_through: bool = True) -> None:
         """Make a Click window float above all apps (and full-screen apps); optionally let clicks pass through."""
 

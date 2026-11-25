@@ -206,6 +206,21 @@ def _locate_one(where: str, g: MacGeometry) -> tuple[Rect, str] | None:
     return None
 
 
+def dock_app(query: str, g: MacGeometry) -> Element | None:
+    """Any app in the Dock (pinned or running), found from the Dock's own settings: no permission needed."""
+    q = _clean(query).removesuffix(" app").strip()
+    if not q:
+        return None
+    for label, r in _dock_slots(g):
+        lab = label.lower()
+        if lab == q or (len(q) >= 4 and (lab.startswith(q) or q in lab.split())):
+            el = Element(name=label, role="DockItem", rect=r, window_title="Dock")
+            el.extra["note"] = f"Here's {label} in your Dock."
+            el.extra["from_map"] = True
+            return el
+    return None
+
+
 def locate(query: str, g: MacGeometry) -> Element | None:
     """Clicky's best idea of where `query` is on this Mac, as an Element with a note, or None."""
     key = match(query)

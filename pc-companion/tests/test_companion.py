@@ -245,3 +245,25 @@ def test_mac_typing_keys_are_known():
     for k in ("v", "n", "return", "esc", "space", "tab", "left"):
         assert k in KEYCODES
     assert MODS["cmd"] == 1 << 20 and MODS["shift"] == 1 << 17
+
+
+def test_screen_layout_says_where_things_are():
+    from PIL import Image
+
+    from companion.platforms import Element, Platform, Rect, Window
+    from companion.screen import ScreenService
+
+    class P(Platform):
+        def ui_elements(self, w):
+            return [Element("New Message", "Button", Rect(20, 60, 80, 30)), Element("Send", "Button", Rect(1300, 60, 60, 30))]
+
+        def dock_items(self):
+            return [Element("Mail", "DockItem", Rect(600, 860, 50, 50))]
+
+    svc = ScreenService(P(), {"blocklist": []})
+    lines = [{"text": "Inbox", "x": 10, "y": 10, "w": 60, "h": 20, "conf": 0.9},
+             {"text": "Hello Sam", "x": 700, "y": 450, "w": 100, "h": 20, "conf": 0.9}]
+    out = svc._layout(lines, Image.new("RGB", (1440, 900)), Rect(0, 0, 1440, 900),
+                      Window(1, "Inbox", "Mail", Rect(0, 0, 1440, 900)))
+    assert "[top-left] Inbox" in out and "[middle] Hello Sam" in out
+    assert "New Message (button, top-left)" in out and "Send (button, top-right)" in out and "Dock: Mail" in out

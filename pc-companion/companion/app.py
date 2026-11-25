@@ -760,6 +760,12 @@ class App:
     async def action_scroll(self, p):
         return await self.actions.scroll(p)
 
+    async def skills_guide(self, p):
+        try:
+            return await self.skills.guide(p)
+        finally:
+            self.bridge.ghostRest.emit()
+
     async def skills_run(self, p):
         try:
             return await self.skills.run(p)

@@ -73,6 +73,7 @@ ROUTES = {
     ("cursor", "scroll"): ("actions", "action_scroll", False),
     ("inference", "describe"): (None, "inference_describe", False),
     ("skills", "run"): ("actions", "skills_run", False),
+    ("skills", "guide"): ("cursor", "skills_guide", False),
 }
 
 

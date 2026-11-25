@@ -22,6 +22,24 @@ from .safety import is_blocked, looks_like_secret, risky_keys
 log = logging.getLogger("click.actions")
 
 
+
+def _wait_for_click_mac(area: Rect, timeout: float, killed) -> bool:
+    """True when the user clicks inside `area` (with a little margin) before `timeout` seconds."""
+    import Quartz
+
+    box = Rect(area.x - 12, area.y - 12, area.w + 24, area.h + 24)
+    end = time.time() + timeout
+    was_down = False
+    while time.time() < end and not killed.is_set():
+        down = Quartz.CGEventSourceButtonState(Quartz.kCGEventSourceStateCombinedSessionState, 0)
+        if down and not was_down:
+            loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
+            if box.contains(loc.x, loc.y):
+                return True
+        was_down = down
+        time.sleep(0.05)
+    return False
+
 class ActionError(RuntimeError):
     pass
 
@@ -142,6 +160,14 @@ class Actions:
         if rect:
             self.bridge.ghostHighlight.emit(rect.x, rect.y, rect.w, rect.h, "")
         area = rect or Rect(int(x) - 30, int(y) - 30, 60, 60)
+        if sys.platform == "darwin":
+            # watch for the click by asking macOS where the mouse is and whether it's pressed (safe from any
+            # thread, needs no extra permission)
+            got = await asyncio.to_thread(_wait_for_click_mac, area, float(a.get("timeout", 90)), self.killed)
+            if got:
+                return {"status": "user_clicked", "element": name}
+            return {"status": "stopped" if self.killed.is_set() else "timeout",
+                    "note": "The user didn't click it in time."}
         clicked = threading.Event()
         try:
             from pynput import mouse

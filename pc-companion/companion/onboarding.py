@@ -148,7 +148,10 @@ class Onboarding(QWidget):
         tips = QLabel("<p style='line-height:150%'>"
                       "<b>Ask anything:</b> click the orb in the top-right corner.<br>"
                       "<b>Open or hide Click:</b> Cmd + Shift + Space.<br>"
-                      "<b>Show me where…:</b> Click points with its own cursor.<br>"
+                      "<b>Show me where…:</b> Clicky points with its own cursor.<br>"
+                      "<b>Show me how to…:</b> Clicky walks you through it, step by step.<br>"
+                      "<b>Just say it:</b> open apps or files, write notes, text someone, email, "
+                      "set reminders, change the volume or dark mode, play music.<br>"
                       "<b>Stop everything:</b> Control + Option + Esc.</p>")
         tips.setStyleSheet(TEXT + "font-size: 14px;")
         tips.setWordWrap(True)

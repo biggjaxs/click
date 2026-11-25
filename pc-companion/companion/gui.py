@@ -295,13 +295,27 @@ class GhostController(QObject):
         bridge.narrate.connect(self.narrate)
         bridge.styleChanged.connect(self.repaint_all)
         app = QApplication.instance()
-        app.screenAdded.connect(lambda *_: self.rebuild())
-        app.screenRemoved.connect(lambda *_: self.rebuild())
+        app.screenAdded.connect(lambda *_: self._screens_changed())
+        app.screenRemoved.connect(lambda *_: self._screens_changed())
+        for sc in app.screens():
+            sc.geometryChanged.connect(lambda *_: self._screens_changed())
         self.rebuild()
 
     @property
     def style(self) -> dict:
         return self.settings["cursor"]
+
+    def _screens_changed(self):
+        """A screen was plugged in, removed or changed resolution (or the Mac woke up): redraw Clicky's
+        layer to fit, a moment later when macOS has settled."""
+        QTimer.singleShot(800, self.rebuild)
+        app = QApplication.instance()
+        for sc in app.screens():
+            try:
+                sc.geometryChanged.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            sc.geometryChanged.connect(lambda *_: self._screens_changed())
 
     def rebuild(self):
         from .screen import monitors
@@ -365,6 +379,13 @@ class GhostController(QObject):
     def move_to(self, x: float, y: float, label: str):
         self.last_active = time.time()
         self.docked = False
+        if not self.overlays:
+            self.rebuild()
+        for o in self.overlays:  # make sure Clicky's layer is visible and in front before it moves
+            try:
+                self.platform.raise_overlay(o)
+            except Exception:  # noqa: BLE001
+                pass
         self._vanish_after_anim = False
         if self.visible:
             start = (self.x, self.y)
@@ -483,7 +504,7 @@ class GhostController(QObject):
                     self.visible = False
                     self.docked = False
         elif self.visible and time.time() - getattr(self, "last_active", 0) > self.IDLE_HIDE_S \
-                and not self._waiting_for_ok():
+                and not self._waiting_for_ok() and not getattr(self, "hold", False):
             self.rest()  # safety net: Clicky never stays parked on screen doing nothing
         self.repaint_all()
 

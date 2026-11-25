@@ -404,3 +404,14 @@ def test_nothing_is_done_before_enter(services):
     calls = _wire(services, {})
     run(services.orchestrator.speculate(None, "open safari and close notes", Recorder()))
     assert services.orchestrator._spec is None and not calls
+
+
+def test_show_me_how_runs_a_guided_lesson(services):
+    calls = _wire(services, {("skills", "guide"): {"status": "done", "steps_done": 6, "steps": 6}})
+    rec = Recorder()
+    out = run(services.orchestrator.handle(send=rec, text="show me how to send an email", conversation_id=None,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    g = next(c for c in calls if c[:2] == ("skills", "guide"))
+    assert g[2]["steps"][0]["app"] == "Mail"
+    assert "How to send an email" in out["answer"] and "you did it" in out["answer"]
+    assert sum(1 for e in rec.events if e["type"] == "token") == 2  # steps first, then the ending (no repeat)

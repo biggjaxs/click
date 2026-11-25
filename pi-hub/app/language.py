@@ -19,7 +19,8 @@ from dataclasses import dataclass, field
 from .intents import _clean_song, _expand, settings_pane, strip_clicky
 
 ALLOWED = {"open_app", "quit_app", "open_settings", "play_music", "music_control", "new_note", "type_text",
-           "open_url"}
+           "open_url", "open_file", "append_note", "send_message", "email_draft", "reminder", "volume", "dark_mode",
+           "wifi", "screenshot"}
 
 
 @dataclass
@@ -60,7 +61,8 @@ _DESIRES = [  # "I want to listen to X" is a request in disguise: say it plainly
     (r"^(?:i\s+(?:want|need)\s+to|let\s+me)\s+(?:search|google|look\s+up)\s+(.+)$", r"search \1"),
 ]
 _COMMAND_WORDS = ["open", "launch", "start", "close", "quit", "play", "pause", "write", "type", "make", "create",
-                  "search", "google", "show", "skip", "next", "notes", "safari", "music", "settings"]
+                  "search", "google", "show", "skip", "next", "notes", "safari", "music", "settings", "text", "email",
+                  "message", "remind", "mute", "unmute", "send", "turn", "take", "volume"]
 
 
 def _fix_typos(t: str) -> str:
@@ -117,6 +119,7 @@ def resolve(t: str, st: DialogState) -> str:
 
 # ---- 3. split into clauses -------------------------------------------------------------------------------------------
 VERBS = (r"open|launch|start|run|close|quit|exit|play|pause|resume|stop|skip|next|previous|write|type|put|add|"
+         r"text|message|email|remind|mute|unmute|take|"
          r"enter|jot|make|create|new|search|google|look up|go to|take me to|show|bring up|turn|change|set|"
          r"switch to|visit|find")
 _SPLIT = re.compile(rf"\s*(?:,\s*(?:and\s+)?(?:then\s+)?|;\s*|\.\s+|\s+and\s+then\s+|\s+then\s+|\s+and\s+(?:also\s+)?"
@@ -185,10 +188,86 @@ def _content(x: str, now) -> dict:
     return {"text": _expand(x, now)}
 
 
+def _extra_clause(c: str, low: str, now) -> list[dict] | None:
+    """Notes you already have, messages, email, reminders, volume, dark mode, Wi-Fi, screenshots, files."""
+    # add to an existing note: "add eggs to my groceries note", "add X to the note called keyboard"
+    m = re.match(r"^(?:add|append|put|write|type)\s+(?P<x>.+?)\s+(?:to|in|into|on)\s+(?:my|the)\s+(?:note\s+(?:called|titled|named)\s+"
+                 r"(?P<t1>.+)|(?P<t2>.+?)\s+note)$", c, re.I)
+    if m:
+        return [{"skill": "append_note", "title": _value(m.group("t1") or m.group("t2")), **_content(m.group("x"), now)}]
+    # messages: "text mom saying I'm on my way", "send a message to John that says hi", "message Sarah hi"
+    m = re.match(r"^(?:text|message|imessage|send\s+(?:a\s+)?(?:text|message|imessage)\s+to|send|tell)\s+(?P<to>[\w.@+' -]+?)"
+                 r"(?:\s*[,:]\s*|\s+(?:saying|that says|that|telling (?:them|him|her)|to say|and say|with)\s+)(?P<x>.+)$", c, re.I)
+    if m and not re.match(r"^(?:an?\s+)?(?:email|e-mail)\b", m.group("to"), re.I):
+        return [{"skill": "send_message", "to": _value(m.group("to")), **_content(m.group("x"), now)}]
+    # email (a draft you send yourself): "email bob about the meeting", "write an email to sara saying ..."
+    m = re.match(r"^(?:email|e-mail|send\s+(?:an\s+)?e-?mail\s+to|write\s+(?:an\s+)?e-?mail\s+to|draft\s+(?:an\s+)?e-?mail\s+to|"
+                 r"compose\s+(?:an\s+)?e-?mail\s+to)\s+(?P<to>[\w.@+' -]+?)(?:\s+(?:about|regarding|re)\s+(?P<subj>.+?))?"
+                 r"(?:\s*[,:]\s*|\s+(?:saying|that says|telling (?:them|him|her)|asking)\s+(?P<x>.+))?$", c, re.I)
+    if m:
+        step = {"skill": "email_draft", "to": _value(m.group("to"))}
+        if m.group("subj"):
+            step["subject"] = _value(m.group("subj"))
+        if m.group("x"):
+            step.update(_content(m.group("x"), now))
+        elif m.group("subj"):
+            step["compose"] = f"a short, friendly email about {m.group('subj')}"
+        return [step]
+    # reminders: "remind me to call mom at 5pm", "remind me tomorrow to pay rent"
+    m = re.match(r"^(?:remind me|set a reminder|make a reminder|add a reminder)(?:\s+(?P<w1>.+?))?\s+(?:to|that i need to|"
+                 r"that|about)\s+(?P<x>.+)$", c, re.I)
+    if m:
+        what, when_text = m.group("x"), (m.group("w1") or "")
+        w2 = re.search(r"\s+((?:at|on|in|tomorrow|tonight|this|next|by)\b.*)$", what, re.I)
+        if w2 and parse_when(w2.group(1), now):
+            what, when_text = what[:w2.start()], (when_text + " " + w2.group(1)).strip()
+        step = {"skill": "reminder", "text": _value(what)}
+        when = parse_when(when_text, now) if when_text else None
+        if when:
+            step["when"], step["when_text"] = when.isoformat(timespec="minutes"), when_text
+        return [step]
+    # volume / mute
+    if re.match(r"^(?:turn|crank|bring)\s+(?:the\s+)?(?:volume|sound|music|it)\s+up$|^(?:volume up|louder|make it louder)$", low):
+        return [{"skill": "volume", "action": "up"}]
+    if re.match(r"^(?:turn|bring)\s+(?:the\s+)?(?:volume|sound|music|it)\s+down$|^(?:volume down|quieter|make it quieter)$", low):
+        return [{"skill": "volume", "action": "down"}]
+    m = re.match(r"^(?:set|turn|change)\s+(?:the\s+)?(?:volume|sound)\s+to\s+(\d{1,3})\s*(?:%|percent)?$", low)
+    if m:
+        return [{"skill": "volume", "action": "set", "level": int(m.group(1))}]
+    if re.match(r"^(?:mute|silence)(?:\s+(?:the\s+)?(?:sound|volume|mac|computer|it))?$", low):
+        return [{"skill": "volume", "action": "mute"}]
+    if re.match(r"^unmute(?:\s+.*)?$", low):
+        return [{"skill": "volume", "action": "unmute"}]
+    # dark / light mode
+    m = re.match(r"^(?:turn on|switch to|enable|use|go to|set)\s+(?:the\s+)?(dark|light)\s+mode$|^(dark|light)\s+mode(?:\s+on)?$", low)
+    if m:
+        return [{"skill": "dark_mode", "on": (m.group(1) or m.group(2)) == "dark"}]
+    if re.match(r"^turn off\s+(?:the\s+)?dark\s+mode$", low):
+        return [{"skill": "dark_mode", "on": False}]
+    # wifi on/off
+    m = re.match(r"^turn\s+(on|off)\s+(?:the\s+|my\s+)?wi-?fi$|^turn\s+(?:the\s+|my\s+)?wi-?fi\s+(on|off)$", low)
+    if m:
+        return [{"skill": "wifi", "on": (m.group(1) or m.group(2)) == "on"}]
+    # screenshot
+    if re.match(r"^(?:take|grab|make|capture)\s+(?:a\s+)?(?:screenshot|screen ?shot|picture of (?:my|the) screen)$", low):
+        return [{"skill": "screenshot"}]
+    # files: "open my resume", "open the budget spreadsheet", "open report.pdf"
+    m = re.match(r"^(?:open|show me|pull up|find and open)\s+(?:my\s+|the\s+)?(?P<f>.+?\.(?:pdf|docx?|xlsx?|pptx?|pages|numbers|"
+                 r"key|txt|csv|png|jpe?g|heic|mov|mp4|zip)|.+?\s+(?:file|document|doc|pdf|spreadsheet|presentation|"
+                 r"slides|essay|resume|résumé|report))$", c, re.I)
+    if m:
+        f = re.sub(r"\s+(?:file|document|doc)$", "", m.group("f"), flags=re.I).strip()
+        return [{"skill": "open_file", "query": re.sub(r"^(?:my|the)\s+", "", _value(f), flags=re.I)}]
+    return None
+
+
 def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
     """One step (or None if this clause isn't something Clicky can do)."""
     c = c.strip()
     low = c.lower()
+    extra = _extra_clause(c, low, now)
+    if extra is not None:
+        return extra
     # music controls
     if re.match(r"^(?:pause|stop)(?:\s+(?:the\s+)?(?:music|song|playing|it))?$", low):
         return [{"skill": "music_control", "action": "pause"}]
@@ -324,6 +403,59 @@ def nice_app(name: str) -> str:
     return _APP_NAMES.get(n.lower(), " ".join(w[:1].upper() + w[1:] if w.islower() else w for w in n.split()))
 
 
+_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def parse_when(text: str, now: dt.datetime | None = None) -> dt.datetime | None:
+    """'at 5pm', 'tomorrow at 9', 'in 20 minutes', 'tonight', 'on friday at noon' -> a date and time."""
+    now = now or dt.datetime.now()
+    t = text.lower().strip().strip(",.")
+    if not t:
+        return None
+    m = re.search(r"\bin\s+(\d+|an?|half an?)\s*(minutes?|mins?|hours?|hrs?)\b", t)
+    if m:
+        n = {"a": 1, "an": 1, "half a": 0.5, "half an": 0.5}.get(m.group(1), None)
+        n = float(m.group(1)) if n is None else n
+        return (now + (dt.timedelta(hours=n) if m.group(2).startswith("h") else dt.timedelta(minutes=n))).replace(
+            second=0, microsecond=0)
+    day = now.date()
+    if "tomorrow" in t:
+        day = day + dt.timedelta(days=1)
+    for i, name in enumerate(_DAYS):
+        if re.search(rf"\b(?:on\s+|next\s+|this\s+)?{name}\b", t):
+            ahead = (i - now.weekday()) % 7 or 7
+            day = now.date() + dt.timedelta(days=ahead)
+    hour, minute = None, 0
+    m = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\b", t)
+    if m and (m.group(3) or ":" in m.group(0) or re.search(r"\bat\s+\d", t)):
+        hour, minute = int(m.group(1)), int(m.group(2) or 0)
+        ap = (m.group(3) or "").replace(".", "")
+        if ap == "pm" and hour < 12:
+            hour += 12
+        elif ap == "am" and hour == 12:
+            hour = 0
+        elif not ap and hour < 8:
+            hour += 12  # "at 5" usually means 5 pm
+    elif "noon" in t or "lunch" in t:
+        hour = 12
+    elif "tonight" in t or "evening" in t:
+        hour = 20
+    elif "morning" in t:
+        hour = 9
+    elif "afternoon" in t:
+        hour = 15
+    elif "midnight" in t:
+        hour = 0
+    if hour is None:
+        if day == now.date():
+            return None
+        hour = 9
+    when = dt.datetime.combine(day, dt.time(hour % 24, minute))
+    if when <= now and day == now.date() and "today" not in t:
+        when += dt.timedelta(days=1)
+    return when
+
+
 def _q(s: str) -> str:
     import urllib.parse
 
@@ -349,6 +481,25 @@ def describe(step: dict) -> str:
     if k == "type_text":
         what = step.get("compose") or step.get("text") or ""
         return f"write {what[:50]}" if step.get("compose") else f"type “{what[:40]}”"
+    if k == "open_file":
+        return f"open “{step['query']}”"
+    if k == "append_note":
+        return f"add to your note “{step['title']}”"
+    if k == "send_message":
+        return f"message {step['to']}"
+    if k == "email_draft":
+        return f"write an email to {step['to']}" + (f" about {step['subject']}" if step.get("subject") else "")
+    if k == "reminder":
+        return f"remind you to {step['text']}" + (f" {step['when_text']}" if step.get("when_text") else "")
+    if k == "volume":
+        return {"up": "turn the volume up", "down": "turn the volume down", "mute": "mute",
+                "unmute": "unmute"}.get(step.get("action"), f"set the volume to {step.get('level')}%")
+    if k == "dark_mode":
+        return "turn on dark mode" if step.get("on") else "turn on light mode"
+    if k == "wifi":
+        return "turn Wi-Fi on" if step.get("on") else "turn Wi-Fi off"
+    if k == "screenshot":
+        return "take a screenshot"
     if k == "open_url":
         u = step["url"]
         return "search Google" if "google.com/search" in u else f"open {u.split('//')[-1].split('/')[0]}"
@@ -422,12 +573,15 @@ PLAN_SCHEMA = {
         "skill": {"type": "string", "enum": sorted(ALLOWED) + ["none"]},
         "app": {"type": "string"}, "text": {"type": "string"}, "compose": {"type": "string"},
         "query": {"type": "string"}, "pane": {"type": "string"}, "url": {"type": "string"}, "title": {"type": "string"},
+        "to": {"type": "string"}, "subject": {"type": "string"}, "on": {"type": "boolean"},
         "action": {"type": "string"}}, "required": ["skill"]}}},
     "required": ["steps"]}
 
 PLANNER_PROMPT = """You turn a request for a Mac into steps. Skills:
 open_app(app) quit_app(app) open_settings(pane) play_music(query) music_control(action: play|pause|next|previous)
-new_note(title, text OR compose) type_text(text OR compose) open_url(url)
+new_note(title, text OR compose) type_text(text OR compose) open_url(url) open_file(query)
+append_note(title, text) send_message(to, text) email_draft(to, subject, text OR compose) reminder(text)
+volume(action: up|down|mute|unmute) dark_mode(on: true|false) wifi(on: true|false) screenshot()
 Use "compose" when the AI must write it (e.g. "a paragraph on why recycling matters"), "text" for exact words.
 Values are ONLY the thing itself: never include command words like titled, called, named, saying, that says, about.
 If the request is a question or chat, not something to do on the Mac, return {"steps":[{"skill":"none"}]}.
@@ -465,7 +619,8 @@ def validate_llm_plan(data: dict) -> list[dict] | None:
         if k not in ALLOWED:
             continue
         need = {"open_app": "app", "quit_app": "app", "open_settings": "pane", "play_music": "query",
-                "music_control": "action", "open_url": "url"}.get(k)
+                "music_control": "action", "open_url": "url", "open_file": "query", "append_note": "title",
+                "send_message": "to", "volume": "action", "reminder": "text"}.get(k)
         if need and not str(s.get(need) or "").strip():
             continue
         if k == "open_url" and not str(s["url"]).startswith(("http://", "https://")):
@@ -476,7 +631,11 @@ def validate_llm_plan(data: dict) -> list[dict] | None:
                 continue
             s["pane"] = pane
         clean = {"skill": k, **{f: str(s[f])[:2000] for f in ("app", "text", "compose", "query", "pane", "url", "action",
-                                                              "title") if s.get(f)}}
+                                                              "title", "to", "subject") if s.get(f)}}
+        if k in ("dark_mode", "wifi"):
+            clean["on"] = bool(s.get("on"))
+        if k == "send_message" and not ({"text", "compose"} & set(clean)):
+            continue  # never send an empty message
         for f in ("title", "text"):  # a small model sometimes copies the cue word into the value
             if clean.get(f):
                 clean[f] = re.sub(rf"^(?:{_TITLE_CUE}|{_BODY_CUE})\s+", "", clean[f], flags=re.I).strip()

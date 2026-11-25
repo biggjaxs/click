@@ -71,3 +71,28 @@ def test_indirect_requests_and_typos():
     assert steps("open notse and wirte hello there")[-1] == {"skill": "new_note", "text": "hello there"}
     # your own words are never "corrected"
     assert steps("make a note saying opne the windos")[-1]["text"] == "opne the windos"
+
+
+def test_new_abilities():
+    import datetime as dt
+
+    now = dt.datetime(2026, 11, 25, 14, 0)
+    assert steps("text mom saying I'm on my way") == [{"skill": "send_message", "to": "mom", "text": "I'm on my way"}]
+    assert steps("add eggs to my groceries note") == [{"skill": "append_note", "title": "groceries", "text": "eggs"}]
+    assert steps("write an email to sara@x.com saying thanks for lunch")[0]["skill"] == "email_draft"
+    r = plan("remind me to call mom at 5pm", now=now)["plan"][0]
+    assert r["text"] == "call mom" and r["when"] == "2026-11-25T17:00"
+    assert steps("turn the volume down")[0] == {"skill": "volume", "action": "down"}
+    assert steps("turn on dark mode") == [{"skill": "dark_mode", "on": True}]
+    assert steps("open my resume") == [{"skill": "open_file", "query": "resume"}]
+    assert steps("take a screenshot") == [{"skill": "screenshot"}]
+
+
+def test_lessons():
+    from app.guides import find
+
+    title, st = find("show me how to send an email")
+    assert st[0]["app"] == "Mail" and any(s.get("target") == "Send" for s in st)
+    assert find("how do I make pancakes") is None  # a cooking question, not a computer lesson
+    assert find("walk me through connecting to wifi")[1]  # built-in
+    assert find("show me how to add a contact") == ("How to add a contact", [])  # the AI writes this one

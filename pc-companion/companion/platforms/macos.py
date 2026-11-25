@@ -218,9 +218,28 @@ class MacPlatform(Platform):
             win.setCollectionBehavior_((1 << 0) | (1 << 4) | (1 << 6) | (1 << 8))
             win.setIgnoresMouseEvents_(bool(click_through))  # the orb must stay clickable
             win.setHasShadow_(False)
+            try:
+                win.setHidesOnDeactivate_(False)  # never vanish when you click into another app
+            except Exception:  # noqa: BLE001
+                pass
             win.orderFrontRegardless()
         except Exception:  # noqa: BLE001
             log.warning("could not raise the overlay window")
+
+    def raise_overlay(self, widget) -> None:
+        """Bring Clicky's layer back to the very front (other apps, full-screen apps and display sleep
+        can push it back)."""
+        if not _real_display():
+            return
+        try:
+            import objc
+
+            win = objc.objc_object(c_void_p=int(widget.winId())).window()
+            if not win.isVisible():
+                widget.show()
+            win.orderFrontRegardless()
+        except Exception:  # noqa: BLE001
+            pass
 
     def exclude_from_capture(self, widget) -> None:
         if not _real_display():

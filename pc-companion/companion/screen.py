@@ -231,11 +231,57 @@ class ScreenService:
         if active:
             out["active_window"] = ({"title": "[hidden: blocklisted app]", "app": ""} if self._blocked(active)
                                     else {"title": active.title, "app": active.app})
+        try:
+            out["layout"] = self._layout(lines, img, rect, active)
+        except Exception:  # noqa: BLE001 - a nice extra; never block the answer
+            log.exception("layout failed")
         if image:
             out["image_b64"] = self.encode(img, "JPEG", max_side=1024)  # small = fewer image tokens = faster
             out["mime"] = "image/jpeg"
         out["ms"] = int((time.perf_counter() - t0) * 1000)
         return out
+
+    @staticmethod
+    def _where(x: float, y: float, r: Rect) -> str:
+        """'top-left', 'middle', 'bottom-right'... of the screen."""
+        cx = (x - r.x) / max(1, r.w)
+        cy = (y - r.y) / max(1, r.h)
+        v = "top" if cy < 0.33 else "bottom" if cy > 0.66 else "middle"
+        h = "left" if cx < 0.33 else "right" if cx > 0.66 else ""
+        return f"{v}-{h}" if h else ("middle" if v == "middle" else v)
+
+    def _layout(self, lines: list, img, rect: Rect, active) -> str:
+        """WHERE things are, so the AI can say 'top-right' and Clicky can point: text by screen area, the
+        front window's buttons, the Dock."""
+        sx, sy = rect.w / img.width, rect.h / img.height
+        areas: dict[str, list[str]] = {}
+        for ln in lines:
+            if ln.get("conf", 1) < 0.4 or not ln["text"].strip():
+                continue
+            where = self._where(rect.x + (ln["x"] + ln["w"] / 2) * sx, rect.y + (ln["y"] + ln["h"] / 2) * sy, rect)
+            areas.setdefault(where, []).append(ln["text"].strip())
+        order = ["top-left", "top", "top-right", "middle-left", "middle", "middle-right",
+                 "bottom-left", "bottom", "bottom-right"]
+        parts = ["Screen areas: " + " | ".join(f"[{a}] " + " · ".join(areas[a][:25]) for a in order if a in areas)]
+        if active and not self._blocked(active):
+            seen, buttons = set(), []
+            for el in self.platform.ui_elements(active)[:150]:
+                n = (el.name or "").strip()
+                if not n or n.lower() in seen or len(n) > 40:
+                    continue
+                seen.add(n.lower())
+                buttons.append(f"{n} ({el.role.lower()}, {self._where(*el.rect.center, rect)})")
+                if len(buttons) >= 45:
+                    break
+            if buttons:
+                parts.append(f"Things you can click in {active.app}: " + "; ".join(buttons))
+        try:
+            dock = [e.name for e in self.platform.dock_items()][:30]
+            if dock:
+                parts.append("Dock: " + ", ".join(dock))
+        except Exception:  # noqa: BLE001
+            pass
+        return "\n".join(parts)[:5000]
 
     def list_windows(self, **_) -> dict:
         out = []
@@ -314,6 +360,11 @@ class ScreenService:
             else:
                 top = max(scored, key=lambda s: s[0])[1]
                 top.extra.setdefault("note", landmark.extra.get("note", ""))
+        if not scored or max(sc for sc, _ in scored) < 0.85:
+            extra = self._app_on_screen(query)  # an app in the Dock or an open window, without permissions
+            if extra is not None:
+                scored.append((0.93, extra))
+                source = "dock / windows"
         if (not scored or max(sc for sc, _ in scored) < 0.85) and landmark is None and deep:
             for sc, el in self._find_by_text(q):
                 if not any(_overlaps(el.rect, r) for r in own):
@@ -337,6 +388,31 @@ class ScreenService:
         if problems and not found:
             out["permission_problem"] = " ".join(problems)
         return out
+
+    def _app_on_screen(self, query: str):
+        """Find an app by name: its open window (title bar) or its Dock icon."""
+        q = _norm(query).removesuffix(" app").strip()
+        if not q:
+            return None
+        try:
+            own = self.own_rects()
+            for w in self.platform.list_windows()[:20]:
+                if _norm(w.app) == q and w.rect.w > 80 and not any(_overlaps(w.rect, r) for r in own):
+                    bar = Rect(w.rect.x, w.rect.y, w.rect.w, min(28, w.rect.h))
+                    el = Element(name=w.app, role="Window", rect=bar, window_title=w.app)
+                    el.extra["note"] = f"Here's your {w.app} window."
+                    return el
+        except Exception:  # noqa: BLE001
+            pass
+        geo_fn = getattr(self, "geometry_fn", None)
+        try:
+            from . import macmap
+
+            g = geo_fn() if geo_fn else (macmap.mac_geometry(None) if sys.platform == "darwin" else None)
+            return macmap.dock_app(query, g) if g else None
+        except Exception:  # noqa: BLE001
+            log.exception("dock lookup failed")
+            return None
 
     def _map_hit(self, query: str):
         """Where Clicky's Mac map says `query` is (or None)."""

@@ -118,7 +118,7 @@ class QuickAsk(QWidget):
         chip_row = QHBoxLayout(self.chips)
         chip_row.setContentsMargins(0, 0, 0, 0)
         chip_row.setSpacing(6)
-        for label, ask in (("Where's Wi\u2011Fi?", "where is wifi"), ("Open Notes", "open notes"),
+        for label, ask in (("Where's Wi\u2011Fi?", "where is wifi"), ("Show me how to email", "show me how to send an email"),
                            ("Hi Clicky", "show me clicky")):
             c = QPushButton(label)
             c.setCursor(Qt.PointingHandCursor)
