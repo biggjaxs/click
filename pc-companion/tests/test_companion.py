@@ -137,6 +137,7 @@ def test_find_prefers_dock_app_and_never_points_at_clicks_own_chat():
 
     s = ScreenService(FakeMac(), {"blocklist": []})
     s.own_rects = lambda: [chat]
+    s.geometry_fn = lambda: None  # this test is about Accessibility results, not the real Mac's layout
     s._find_by_text = lambda q: [(1.0, Element("system settings", "Text", Rect(1150, 120, 120, 16)))]  # in the chat
     res = s.find_ui_element("system settings")
     assert res["matches"][0]["name"] == "System Settings" and res["matches"][0]["where"] == "Dock"
@@ -149,6 +150,7 @@ def test_find_prefers_dock_app_and_never_points_at_clicks_own_chat():
 
     s2 = ScreenService(NoDock(), {"blocklist": []})
     s2.own_rects = lambda: [chat]
+    s2.geometry_fn = lambda: None
     s2._find_by_text = lambda q: [(1.0, Element("system settings", "Text", Rect(1150, 120, 120, 16)))]
     res2 = s2.find_ui_element("system settings")
     assert res2["matches"][0]["name"] == "Apple" and "Apple menu" in res2["matches"][0]["note"]
