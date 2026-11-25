@@ -71,6 +71,10 @@ exe = EXE(
     entitlements_file=str(Path(SPECPATH) / "entitlements.plist"),
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Click")
+import re as _re
+
+_VERSION = _re.search(r'__version__ = "([^"]+)"',
+                      (Path(SPECPATH).parent / "pc-companion" / "companion" / "__init__.py").read_text()).group(1)
 app = BUNDLE(
     coll,
     name="Click.app",
@@ -79,7 +83,9 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "Click",
         "CFBundleDisplayName": "Click",
-        "CFBundleShortVersionString": "1.1.0",
+        # the real version, so macOS always knows which copy of Click is the newest
+        "CFBundleShortVersionString": _VERSION,
+        "CFBundleVersion": f"{_VERSION}.{os.environ.get('GITHUB_RUN_NUMBER', '0')}",
         "LSUIElement": True,                       # lives in the menu bar, no Dock icon
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": True,

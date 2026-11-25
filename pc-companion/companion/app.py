@@ -35,6 +35,9 @@ class App:
         self.qt = QApplication.instance() or QApplication(sys.argv)
         self.qt.setQuitOnLastWindowClosed(False)
         self.qt.setApplicationName("Click")
+        if "--selftest" not in sys.argv:
+            _move_to_applications()   # opened from the download / disk image: offer to install properly
+            _close_other_copies()     # an older Click still running from somewhere else: close it
         if _already_running():
             sys.exit(0)  # the running Click was asked to show itself
         _hide_dock_icon()
@@ -728,6 +731,93 @@ class App:
 
 
 _INSTANCE = "app.click.assistant.instance"
+
+
+def _bundle_path():
+    """This Click.app's location (macOS packaged app only), else None."""
+    from pathlib import Path
+
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return None
+    exe = Path(sys.executable).resolve()
+    for parent in exe.parents:
+        if parent.suffix == ".app":
+            return parent
+    return None
+
+
+def _close_other_copies() -> None:
+    """If another Click is running from a DIFFERENT place (an old copy), close it so this one takes over.
+    Otherwise opening the new version would just bring back the old one."""
+    import os
+    import signal
+    import subprocess
+    import time as _t
+
+    me = _bundle_path()
+    if not me:
+        return
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=5).stdout
+    except Exception:  # noqa: BLE001
+        return
+    victims = []
+    for line in out.splitlines():
+        pid_s, _, cmd = line.strip().partition(" ")
+        if "Click.app/Contents/MacOS/Click" in cmd and pid_s.isdigit() and int(pid_s) != os.getpid():
+            if not cmd.startswith(str(me) + "/"):
+                victims.append(int(pid_s))
+    for pid in victims:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    if victims:
+        logging.getLogger("click").info("closed older Click copies: %s", victims)
+        _t.sleep(1.5)
+        for pid in victims:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+def _move_to_applications() -> None:
+    """Opened from the disk image, Downloads or anywhere outside Applications: offer to move Click into
+    Applications (replacing any old copy) and reopen from there. macOS's "Quit & Reopen" after granting
+    permissions reopens the copy in Applications, so an old copy there would come back otherwise."""
+    import shutil
+    import subprocess
+
+    me = _bundle_path()
+    if not me or str(me).startswith("/Applications/"):
+        return
+    from PySide6.QtWidgets import QMessageBox
+
+    box = QMessageBox()
+    box.setWindowTitle("Move Click to Applications?")
+    box.setText("Click works best from your Applications folder.\n\nMove it there now? "
+                "Any older Click in Applications will be replaced.")
+    move = box.addButton("Move to Applications", QMessageBox.AcceptRole)
+    box.addButton("Not now", QMessageBox.RejectRole)
+    box.exec()
+    if box.clickedButton() is not move:
+        return
+    dest = "/Applications/Click.app"
+    try:
+        subprocess.run(["pkill", "-f", dest + "/Contents/MacOS/Click"], timeout=5)
+        if shutil.os.path.exists(dest):
+            shutil.rmtree(dest)
+        subprocess.run(["ditto", str(me), dest], check=True, timeout=300)
+        subprocess.run(["open", "-n", dest], timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        QMessageBox.warning(None, "Couldn't move Click",
+                            f"Please drag Click into Applications yourself.\n\n({exc})")
+        return
+    if str(me).startswith("/Volumes/"):  # opened from the disk image: eject it
+        subprocess.Popen(["/bin/sh", "-c", f'sleep 3; hdiutil detach "{me.parent}" -quiet'],
+                         start_new_session=True)
+    sys.exit(0)
 
 
 def _already_running() -> bool:
