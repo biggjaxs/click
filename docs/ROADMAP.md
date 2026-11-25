@@ -200,3 +200,12 @@ every new version arrives by itself.
 To build this: the built-in engine (so everything can come from the box), USB gadget mode with a
 storage drive plus a network link, an "install from box" bootstrap, a model-serving endpoint on the
 Pi, auto-start on box detection, and wipe-on-unplug.
+
+## Built in version 1.5
+- **Fixed:** "chat part isn't answering". A leftover setting made Click look for a Raspberry Pi box
+  instead of running on the Mac. Now it only uses a box after a real Pi pairing (regression test
+  added).
+- Opening Click opens the chat. Reopening it brings the chat back.
+- A cursor tutorial plays on every start. Click's cursor rests (docked) beside the orb when idle.
+- Orb: calm grey "paused" state. It sits a layer above the cursor overlay, so it no longer flickers.
+- The header shows the real status and how much memory the AI is using (roadmap item).

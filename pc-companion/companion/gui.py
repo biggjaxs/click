@@ -153,6 +153,12 @@ class Overlay(QWidget):
                 p.setPen(QPen(ring, 3))
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(pt, r, r)
+            if c.docked and not c._anim:
+                p.setOpacity(0.55)
+                self._pointer(p, pt, color, c.style["style"])
+                p.setOpacity(1.0)
+                p.end()
+                return
             self._pointer(p, pt, color, c.style["style"])
             name = c.style.get("label") or ""
             if name:
@@ -251,8 +257,9 @@ class GhostController(QObject):
         super().__init__()
         self.bridge, self.settings, self.platform = bridge, settings, platform
         self.x, self.y = 0.0, 0.0
-        self.home: tuple[float, float] | None = None   # where the cursor appears from (the chat tile)
+        self.home: tuple[float, float] | None = None   # the cursor's dock, right next to the orb
         self.visible = False
+        self.docked = False
         self.bubble = ""
         self.caption = ""
         self.caption_until = 0.0
@@ -325,8 +332,23 @@ class GhostController(QObject):
     # ---- slots -------------------------------------------------------------------------------------
     def set_home(self, x: float, y: float):
         self.home = (x, y)
+        if self.docked or not self.visible:
+            self.dock()
+
+    def dock(self):
+        """Park the cursor beside the orb, faded, so it's always on screen but out of the way."""
+        if not self.home:
+            return
+        if self.visible and not self.docked:
+            self.move_to(*self.home, "")
+        else:
+            self.x, self.y = self.home
+            self.visible = True
+        self.docked = True
+        self.bubble = ""
 
     def move_to(self, x: float, y: float, label: str):
+        self.docked = False
         if self.visible:
             start = (self.x, self.y)
         else:  # appear at the chat tile and travel, so the movement is easy to follow
@@ -349,10 +371,11 @@ class GhostController(QObject):
         self.caption_until = time.time() + 6
 
     def hide(self):
-        self.visible = False
+        """Done pointing: glide back to the dock beside the orb."""
         self.bubble = ""
         self.caption = ""
         self.highlights = []
+        self.dock()
 
     def set_indicator(self, name: str, on: bool):
         if name == "capture":

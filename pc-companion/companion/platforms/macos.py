@@ -149,7 +149,9 @@ class MacPlatform(Platform):
             import objc
 
             win = objc.objc_object(c_void_p=int(widget.winId())).window()
-            win.setLevel_(101)                 # kCGPopUpMenuWindowLevel: above normal and floating windows
+            # Cursor overlay at pop-up-menu level; the clickable orb one level above it, so the two
+            # never fight over which is on top (that caused a flicker when pausing).
+            win.setLevel_(101 if click_through else 102)
             # canJoinAllSpaces | stationary | ignoresCycle | fullScreenAuxiliary
             win.setCollectionBehavior_((1 << 0) | (1 << 4) | (1 << 6) | (1 << 8))
             win.setIgnoresMouseEvents_(bool(click_through))  # the orb must stay clickable

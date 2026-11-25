@@ -84,10 +84,8 @@ class App:
     # ---- startup: the box part (on this computer or a Pi), then the tile ------------------------------------
     @property
     def mode(self) -> str:
-        if self.settings.get("mode"):
-            return self.settings["mode"]
-        # Earlier versions were always paired with a Pi; new installs run everything on this computer.
-        return "box" if self.settings["pi_cert_pem"] and not self.settings.get("standalone_paired") else "standalone"
+        # Runs on this computer unless a real Click box (Pi) was paired via "Use a Click box".
+        return "box" if self.settings.get("mode") == "box" and self.settings.get("box_paired") else "standalone"
 
     def _start_click(self) -> None:
         try:
@@ -135,6 +133,7 @@ class App:
         self.ask = QuickAsk(self.tile.url, self.settings["cursor"]["color"])
         self.ask.hub_error = lambda: self.hub.last_error if self.hub else ""
         self.ask.open_full.connect(lambda: (self.ask.hide(), self.toggle_tile() if not self.tile.isVisible() else None))
+        self._started = time.time()
         self._watchdog = QTimer()
         self._watchdog.timeout.connect(self._watch)
         self._watchdog.start(1000)
@@ -142,8 +141,9 @@ class App:
             QTimer.singleShot(500, self._selftest_check)
             return
         if self.settings.get("setup_done") and self._models_present():
+            self.tile.show_tile()          # opening Click opens the chat
             self.tile.show_chat()
-            self.tile.header.set_status("Ready", "#16a34a")
+            QTimer.singleShot(1500, self.ghost.demo)   # quick cursor tutorial on every start
         else:
             self.tile.show_tile()
             self._run_setup()
@@ -159,6 +159,24 @@ class App:
             self.ask.link.url = self.hub.url.replace("http://", "ws://") + "/ws"
         if self.tile.isVisible():
             self.tile.show_chat()
+
+    def _update_status(self) -> None:
+        """Header shows the truth: Ready / Starting / Paused, plus how much memory the AI is using."""
+        import httpx
+
+        if self.paused:
+            self.tile.header.set_status("Paused", "#a1a1aa")
+            return
+        if not self.server.pi_connected:
+            self.tile.header.set_status("Starting…", "#a1a1aa")
+            return
+        gb = 0.0
+        try:
+            ps = httpx.get(f"{self.settings['ollama_url']}/api/ps", timeout=1).json().get("models", [])
+            gb = sum(m.get("size", 0) for m in ps) / 1e9
+        except Exception:  # noqa: BLE001
+            pass
+        self.tile.header.set_status(f"Ready · AI using {gb:.1f} GB" if gb else "Ready", "#16a34a")
 
     def toggle_ask(self) -> None:
         """Clicking the orb opens the Ask panel (or the setup screen until Click is ready)."""
@@ -192,8 +210,11 @@ class App:
             if self.hub.alive():
                 self._after_hub_start()
             return
+        self._tick = getattr(self, "_tick", 0) + 1
+        if self._tick % 5 == 1 and self.tile:
+            self._update_status()
         if self.paused:
-            self.bubble.set_state("idle")
+            self.bubble.set_state("paused")
         elif self.ghost.flags.get("control"):
             self.bubble.set_state("acting")
         elif self.busy > 0:
@@ -255,6 +276,12 @@ class App:
         if state == _Qt.ApplicationActive and self.bubble and not self.selftest:
             self.bubble.show()
             self.bubble.raise_()
+            # Clicking Click in Applications/Dock/Spotlight while it runs brings the chat back.
+            if self.tile and not self.tile.isVisible() and not (self.ask and self.ask.isVisible()) \
+                    and self.settings.get("setup_done") and time.time() - getattr(self, "_started", 0) > 3:
+                self.tile.show_tile()
+                if self.tile.stack.currentWidget() is not self.tile.web:
+                    self.tile.show_chat()
 
     def _on_continue(self, fn) -> None:
         view = self.tile.setup
@@ -266,7 +293,6 @@ class App:
     def _finish_setup(self) -> None:
         self.settings.set("setup_done", True)
         self.tile.show_chat()
-        self.tile.header.set_status("Ready", "#16a34a")
         QTimer.singleShot(1200, self.ghost.demo)  # show the cursor once so you know what to look for
 
     def _tile_moved(self) -> None:
@@ -276,7 +302,7 @@ class App:
         g0 = self.bubble.frameGeometry()
         from PySide6.QtCore import QPoint
 
-        pos = QPoint(g0.center().x(), g0.center().y())
+        pos = QPoint(g0.left() - 26, g0.center().y() - 6)  # dock: just left of the orb
         for o in self.ghost.overlays:
             g = o.smap.screen.geometry()
             if g.contains(pos):
@@ -377,6 +403,8 @@ class App:
 
     def toggle_pause(self) -> None:
         self._set_paused(not self.paused)
+        if self.bubble:
+            self.bubble.set_state("paused" if self.paused else "idle")
 
     def kill(self) -> None:
         """Ctrl+Alt+Esc: stop all watching and actions instantly and release control."""
@@ -423,6 +451,7 @@ class App:
                 self.settings.set("pi_cert_pem", data["pi_cert_pem"])
                 self.settings.set("pi_host", host)
                 self.settings.set("mode", "box")
+                self.settings.set("box_paired", True)
                 self.settings.set("standalone_paired", False)
                 self.server.restart_tls()
                 QMessageBox.information(None, "Paired!", "This computer is now paired with your Click box. "

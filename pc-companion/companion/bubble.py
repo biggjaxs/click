@@ -42,7 +42,8 @@ class LiquidBubble(QWidget):
         self.timer.start(33)       # ~30 fps is plenty for a smooth ripple and stays light on the CPU
 
     def set_state(self, state: str):
-        self.state = state
+        if state != self.state:  # only repaint on real changes (no flicker)
+            self.state = state
 
     # ---- drawing ---------------------------------------------------------------------------------------
     def _blob(self, c: QPointF, r: float, t: float, energy: float) -> QPainterPath:
@@ -62,14 +63,16 @@ class LiquidBubble(QWidget):
         return path
 
     def paintEvent(self, _):
-        target = {"idle": 0.0, "starting": 0.5, "thinking": 1.0, "acting": 1.0, "error": 0.2}.get(self.state, 0.0)
+        target = {"idle": 0.0, "starting": 0.5, "thinking": 1.0, "acting": 1.0, "error": 0.2,
+                  "paused": 0.0}.get(self.state, 0.0)
         self._energy += (target - self._energy) * 0.08
         e = self._energy
         t = (time.time() - self._t0) * (1 + 1.8 * e)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         c = QPointF(SIZE / 2, SIZE / 2)
-        base = QColor("#ef4444") if self.state in ("acting", "error") else self.accent
+        base = QColor("#ef4444") if self.state in ("acting", "error") else \
+            QColor("#71717a") if self.state == "paused" else self.accent
         second = QColor("#22d3ee") if self.state not in ("acting", "error") else QColor("#f97316")
         breathe = 1 + 0.04 * math.sin(t * 1.6)
         r = SIZE * 0.30 * breathe

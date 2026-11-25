@@ -99,3 +99,19 @@ def test_hardware_tiers():
     assert small["image_enabled"] and small["image_quality"] == "stabilityai/sd-turbo"
     st["models"]["chat"] = "my-model"
     assert pick_models({"tier": "cpu", "device": "cpu", "vram_gb": 0}, st)["chat"] == "my-model"
+
+
+def test_runs_on_this_computer_unless_a_box_was_really_paired():
+    """Regression: a leftover pairing from older versions made Click look for a Pi that didn't exist."""
+    from companion.app import App
+
+    class S(dict):
+        pass
+
+    mode = App.mode.fget
+    leftover = type("X", (), {"settings": S(pi_cert_pem="CERT", standalone_paired=False)})()
+    assert mode(leftover) == "standalone"
+    half = type("X", (), {"settings": S(mode="box", pi_cert_pem="CERT")})()
+    assert mode(half) == "standalone"
+    real_box = type("X", (), {"settings": S(mode="box", box_paired=True, pi_cert_pem="CERT")})()
+    assert mode(real_box) == "box"
