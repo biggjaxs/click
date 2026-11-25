@@ -95,8 +95,8 @@ def best_app(name: str, apps: dict[str, str]) -> str | None:
 
 SKILL_NAMES = ("open_app", "play_music", "new_note", "type_text", "open_settings", "quit_app", "music_control",
                "open_url", "open_file", "append_note", "send_message", "email_draft", "reminder", "volume",
-               "dark_mode", "wifi", "screenshot")
-HIGH_RISK = {"send_message"}  # these always ask first, even with "Always allow"
+               "dark_mode", "wifi", "screenshot", "keys", "lock_screen", "empty_trash")
+HIGH_RISK = {"send_message", "empty_trash"}  # these always ask first, even with "Always allow"
 
 
 class SkillError(RuntimeError):
@@ -164,6 +164,12 @@ def describe(step: dict) -> str:
         return "Turn Wi-Fi on" if step.get("on") else "Turn Wi-Fi off"
     if k == "screenshot":
         return "Take a screenshot"
+    if k == "keys":
+        return step.get("what") or f"Press {step.get('keys')}"
+    if k == "lock_screen":
+        return "Lock the screen"
+    if k == "empty_trash":
+        return "Empty the Trash (can't be undone)"
     return k or "?"
 
 
@@ -403,7 +409,11 @@ class Skills:
         return sorted(set(hits), key=rank)[0]
 
     async def open_file(self, step: dict) -> str:
-        path = step.get("path") or await asyncio.to_thread(self._find_file, step.get("query", ""))
+        import os
+
+        q = step.get("query", "")
+        path = step.get("path") or (os.path.expanduser(q) if q.startswith("~") else None) \
+            or await asyncio.to_thread(self._find_file, q)
         if not path:
             raise SkillError(f"I couldn't find a file called “{step.get('query', '')}” in your Documents, Desktop, "
                              "Downloads or Pictures.")
@@ -492,7 +502,11 @@ on run argv
     set m to item 2 of argv
     tell application "Messages"
         set svc to 1st account whose service type = iMessage
-        send m to participant h of svc
+        try
+            send m to participant h of svc
+        on error
+            send m to buddy h of svc
+        end try
     end tell
 end run""", handle, text)
         self.app.bridge.narrate.emit(f"Sent to {to}")
@@ -601,6 +615,30 @@ end run""", step.get("text", ""), *parts)
         await asyncio.to_thread(subprocess.run, ["screencapture", "-x", str(path)])
         self.app.bridge.narrate.emit("Screenshot saved to your Desktop")
         return f"saved a screenshot to {path}"
+
+    async def keys(self, step: dict) -> str:
+        """Everyday shortcuts in the app you're using: new tab, undo, copy, paste, save..."""
+        if sys.platform != "darwin":
+            raise SkillError("Shortcuts are Mac-only here.")
+        from . import macinput
+
+        await asyncio.sleep(0.3)
+        await asyncio.to_thread(macinput.press, step["keys"])
+        self.app.bridge.narrate.emit(describe(step))
+        return describe(step).lower()
+
+    async def lock_screen(self, step: dict) -> str:
+        if sys.platform != "darwin":
+            raise SkillError("Locking is Mac-only here.")
+        await asyncio.to_thread(subprocess.run, ["pmset", "displaysleepnow"], capture_output=True)
+        return "locked the screen"
+
+    async def empty_trash(self, step: dict) -> str:
+        if sys.platform != "darwin":
+            raise SkillError("Mac-only.")
+        await self._point("Trash", "Emptying the Trash")
+        await self._script('tell application "Finder" to empty trash')
+        return "emptied the Trash"
 
     async def play_music(self, step: dict) -> str:
         if sys.platform != "darwin":

@@ -20,7 +20,7 @@ from .intents import _clean_song, _expand, settings_pane, strip_clicky
 
 ALLOWED = {"open_app", "quit_app", "open_settings", "play_music", "music_control", "new_note", "type_text",
            "open_url", "open_file", "append_note", "send_message", "email_draft", "reminder", "volume", "dark_mode",
-           "wifi", "screenshot"}
+           "wifi", "screenshot", "keys", "lock_screen", "empty_trash"}
 
 
 @dataclass
@@ -62,7 +62,7 @@ _DESIRES = [  # "I want to listen to X" is a request in disguise: say it plainly
 ]
 _COMMAND_WORDS = ["open", "launch", "start", "close", "quit", "play", "pause", "write", "type", "make", "create",
                   "search", "google", "show", "skip", "next", "notes", "safari", "music", "settings", "text", "email",
-                  "message", "remind", "mute", "unmute", "send", "turn", "take", "volume"]
+                  "message", "remind", "reminder", "reminders", "mute", "unmute", "send", "turn", "take", "volume"]
 
 
 def _fix_typos(t: str) -> str:
@@ -190,6 +190,31 @@ def _content(x: str, now) -> dict:
 
 def _extra_clause(c: str, low: str, now) -> list[dict] | None:
     """Notes you already have, messages, email, reminders, volume, dark mode, Wi-Fi, screenshots, files."""
+    # everyday shortcuts in the front app
+    for pat, keys, what in _SHORTCUTS:
+        if re.match(pat, low):
+            return [{"skill": "keys", "keys": keys, "what": what}]
+    m = re.match(r"^(?:press|hit|do)\s+((?:(?:cmd|command|ctrl|control|option|alt|shift)\s*[+\- ]\s*)+[a-z0-9]|return|enter|escape|esc|tab|space)$", low)
+    if m:
+        k = re.sub(r"\s*[+\- ]\s*", "+", m.group(1)).replace("command", "cmd").replace("control", "ctrl").replace("option", "alt")
+        return [{"skill": "keys", "keys": k, "what": f"Press {m.group(1)}"}]
+    if re.match(r"^lock\s+(?:my\s+|the\s+)?(?:screen|computer|mac|laptop)$", low):
+        return [{"skill": "lock_screen"}]
+    if re.match(r"^(?:empty|clear)\s+(?:the\s+|my\s+)?(?:trash|bin|recycle bin)$", low):
+        return [{"skill": "empty_trash"}]
+    # folders: "open my downloads", "show me my documents folder"
+    m = re.match(r"^(?:open|show me|show|go to|take me to|pull up)\s+(?:my\s+|the\s+)?(downloads|documents|desktop|pictures|"
+                 r"movies|music folder|applications|home)(?:\s+folder)?$", low)
+    if m:
+        name = {"music folder": "Music", "home": ""}.get(m.group(1), m.group(1).title())
+        return [{"skill": "open_file", "query": f"~/{name}" if name != "Applications" else "/Applications"}]
+    # more ways to say "text someone": "send mom a text saying hi", "text john I'll be late"
+    m = re.match(r"^send\s+(?P<to>[\w.@+' -]+?)\s+an?\s+(?:text|message|imessage)\s+(?:saying|that says|:)?\s*(?P<x>.+)$", c, re.I)
+    if m:
+        return [{"skill": "send_message", "to": _value(m.group("to")), **_content(m.group("x"), now)}]
+    m = re.match(r"^text\s+(?P<to>(?:my\s+)?[A-Za-z][\w'-]*)\s+(?P<x>(?!saying\b|that\b).{2,})$", c, re.I)
+    if m and not re.search(r"\b(?:saying|that says)\b|:", c, re.I):
+        return [{"skill": "send_message", "to": _value(m.group("to")), "text": _value(m.group("x"))}]
     # add to an existing note: "add eggs to my groceries note", "add X to the note called keyboard"
     m = re.match(r"^(?:add|append|put|write|type)\s+(?P<x>.+?)\s+(?:to|in|into|on)\s+(?:my|the)\s+(?:note\s+(?:called|titled|named)\s+"
                  r"(?P<t1>.+)|(?P<t2>.+?)\s+note)$", c, re.I)
@@ -203,7 +228,7 @@ def _extra_clause(c: str, low: str, now) -> list[dict] | None:
     # email (a draft you send yourself): "email bob about the meeting", "write an email to sara saying ..."
     m = re.match(r"^(?:email|e-mail|send\s+(?:an\s+)?e-?mail\s+to|write\s+(?:an\s+)?e-?mail\s+to|draft\s+(?:an\s+)?e-?mail\s+to|"
                  r"compose\s+(?:an\s+)?e-?mail\s+to)\s+(?P<to>[\w.@+' -]+?)(?:\s+(?:about|regarding|re)\s+(?P<subj>.+?))?"
-                 r"(?:\s*[,:]\s*|\s+(?:saying|that says|telling (?:them|him|her)|asking)\s+(?P<x>.+))?$", c, re.I)
+                 r"(?:\s*[,:]\s*|\s+(?:saying|that says|telling (?:them|him|her)|asking|and (?:tell|ask) (?:them|him|her)(?: that)?)\s+(?P<x>.+))?$", c, re.I)
     if m:
         step = {"skill": "email_draft", "to": _value(m.group("to"))}
         if m.group("subj"):
@@ -357,7 +382,9 @@ def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
         return [{"skill": "open_url", "url": "https://www.youtube.com/results?search_query=" +
                  _q(m.group("q") or m.group("q2"))}]
     # settings
-    m = (re.match(r"^(?:open|show|go to|take me to|bring up)\s+(?:the\s+|my\s+)?(?P<p>[\w &\-‑]+?)\s+"
+    m = (re.match(r"^(?:open|show|go to|take me to|bring up)\s+(?:the\s+|my\s+)?(?:system\s+)?(?:settings|preferences)\s+"
+                  r"(?:for|to|on)\s+(?:the\s+|my\s+)?(?P<p>[\w &\-\u2011]+)$", c, re.I)
+         or re.match(r"^(?:open|show|go to|take me to|bring up)\s+(?:the\s+|my\s+)?(?P<p>[\w &\-‑]+?)\s+"
                   r"(?:settings|preferences|prefs|options)$", c, re.I)
          or re.match(r"^(?:change|turn (?:on|off)|connect to|adjust|fix)\s+(?:the\s+|my\s+)?(?P<p>wi-?fi|bluetooth|"
                      r"brightness|wallpaper|volume|sound|display|dark mode|screen resolution)(?:\s+.*)?$", c, re.I))
@@ -402,6 +429,29 @@ def nice_app(name: str) -> str:
     n = name.strip().strip(".")
     return _APP_NAMES.get(n.lower(), " ".join(w[:1].upper() + w[1:] if w.islower() else w for w in n.split()))
 
+
+_SHORTCUTS = [  # (what people say, the keys, what Clicky says it's doing)
+    (r"^(?:open\s+)?(?:a\s+)?new\s+tab$", "cmd+t", "New tab"),
+    (r"^(?:open\s+)?(?:a\s+)?new\s+window$", "cmd+n", "New window"),
+    (r"^close\s+(?:this|the|that)\s+tab$", "cmd+w", "Close this tab"),
+    (r"^close\s+(?:this|the|that)\s+window$", "cmd+w", "Close this window"),
+    (r"^undo(?:\s+that|\s+it)?$", "cmd+z", "Undo"),
+    (r"^redo(?:\s+that|\s+it)?$", "cmd+shift+z", "Redo"),
+    (r"^copy(?:\s+(?:that|this|it))?$", "cmd+c", "Copy"),
+    (r"^paste(?:\s+(?:that|this|it))?(?:\s+here)?$", "cmd+v", "Paste"),
+    (r"^cut(?:\s+(?:that|this|it))?$", "cmd+x", "Cut"),
+    (r"^select\s+(?:all|everything)$", "cmd+a", "Select all"),
+    (r"^save(?:\s+(?:this|it|the file|my work|the document))?$", "cmd+s", "Save"),
+    (r"^(?:print|print\s+(?:this|it))$", "cmd+p", "Print"),
+    (r"^(?:refresh|reload)(?:\s+(?:the\s+)?page)?$", "cmd+r", "Reload"),
+    (r"^(?:go\s+)?back$", "cmd+[", "Go back"),
+    (r"^(?:find|search)\s+(?:on|in)\s+(?:this\s+|the\s+)?page$", "cmd+f", "Find on page"),
+    (r"^(?:zoom\s+in|make\s+(?:it|the text)\s+bigger)$", "cmd+=", "Zoom in"),
+    (r"^(?:zoom\s+out|make\s+(?:it|the text)\s+smaller)$", "cmd+-", "Zoom out"),
+    (r"^(?:switch|change)\s+(?:apps?|windows?)$", "cmd+tab", "Switch apps"),
+    (r"^(?:minimi[sz]e)(?:\s+(?:this|it|the window))?$", "cmd+m", "Minimize"),
+    (r"^(?:full\s*screen|make\s+it\s+full\s*screen)$", "cmd+ctrl+f", "Full screen"),
+]
 
 _DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -477,6 +527,8 @@ def describe(step: dict) -> str:
                 "previous": "go back a song"}.get(step.get("action"), "control the music")
     if k == "new_note":
         what = step.get("compose") or step.get("text")
+        if step.get("title"):
+            return f"make a note titled “{step['title']}”" + (" and write it" if step.get("compose") else "")
         return "make a note" + (f" with {what[:50]}" if step.get("compose") else f": “{what[:40]}”" if what else "")
     if k == "type_text":
         what = step.get("compose") or step.get("text") or ""
@@ -573,7 +625,7 @@ PLAN_SCHEMA = {
         "skill": {"type": "string", "enum": sorted(ALLOWED) + ["none"]},
         "app": {"type": "string"}, "text": {"type": "string"}, "compose": {"type": "string"},
         "query": {"type": "string"}, "pane": {"type": "string"}, "url": {"type": "string"}, "title": {"type": "string"},
-        "to": {"type": "string"}, "subject": {"type": "string"}, "on": {"type": "boolean"},
+        "to": {"type": "string"}, "subject": {"type": "string"}, "on": {"type": "boolean"}, "keys": {"type": "string"},
         "action": {"type": "string"}}, "required": ["skill"]}}},
     "required": ["steps"]}
 
@@ -582,6 +634,7 @@ open_app(app) quit_app(app) open_settings(pane) play_music(query) music_control(
 new_note(title, text OR compose) type_text(text OR compose) open_url(url) open_file(query)
 append_note(title, text) send_message(to, text) email_draft(to, subject, text OR compose) reminder(text)
 volume(action: up|down|mute|unmute) dark_mode(on: true|false) wifi(on: true|false) screenshot()
+keys(keys e.g. "cmd+t") lock_screen() empty_trash()
 Use "compose" when the AI must write it (e.g. "a paragraph on why recycling matters"), "text" for exact words.
 Values are ONLY the thing itself: never include command words like titled, called, named, saying, that says, about.
 If the request is a question or chat, not something to do on the Mac, return {"steps":[{"skill":"none"}]}.
@@ -620,7 +673,7 @@ def validate_llm_plan(data: dict) -> list[dict] | None:
             continue
         need = {"open_app": "app", "quit_app": "app", "open_settings": "pane", "play_music": "query",
                 "music_control": "action", "open_url": "url", "open_file": "query", "append_note": "title",
-                "send_message": "to", "volume": "action", "reminder": "text"}.get(k)
+                "send_message": "to", "volume": "action", "reminder": "text", "keys": "keys"}.get(k)
         if need and not str(s.get(need) or "").strip():
             continue
         if k == "open_url" and not str(s["url"]).startswith(("http://", "https://")):
@@ -631,7 +684,7 @@ def validate_llm_plan(data: dict) -> list[dict] | None:
                 continue
             s["pane"] = pane
         clean = {"skill": k, **{f: str(s[f])[:2000] for f in ("app", "text", "compose", "query", "pane", "url", "action",
-                                                              "title", "to", "subject") if s.get(f)}}
+                                                              "title", "to", "subject", "keys") if s.get(f)}}
         if k in ("dark_mode", "wifi"):
             clean["on"] = bool(s.get("on"))
         if k == "send_message" and not ({"text", "compose"} & set(clean)):
