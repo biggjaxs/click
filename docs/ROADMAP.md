@@ -153,3 +153,24 @@ every new version arrives by itself.
    bubble and windows are native and only the chat inside is web technology (like Slack or the
    ChatGPT/Claude desktop apps).
 5. **Name check** before going public (e.g. "Clicky" is an existing analytics product).
+
+## MAIN GOAL: portable box (unplug, move to the next computer, plug in, it works)
+**Built:**
+- Memory, chats, personality and settings live on the Pi (encrypted).
+- The Mac app can use a box (menu bar: "Use a Click box", one-time 6-digit pairing).
+- Encrypted, paired-only connection.
+
+**To build** (needs a real Pi to test; about 1-2 sessions):
+1. **Many computers per box.** Store a list of paired computers (today only one), and connect to
+   whichever is plugged in or online.
+2. **USB-C plug-in.** Pi 5 USB gadget mode (network over USB, same cable as power). The Pi gets a
+   fixed address on the cable; the app finds it automatically (mDNS / fixed IP). Check the laptop
+   port supplies enough power (15 W+).
+3. **Automatic switching.** Box plugged in: use the box's brain link and memory. Unplugged: local
+   mode or "Plug in your box" (decision pending).
+4. **Installer on the box.** The box also appears as a small USB drive with Click.dmg/.exe, so a new
+   computer installs Click from the box in ~30 seconds.
+5. **Leave nothing behind.** On unplug, clear chat caches and session data on that computer.
+   Optionally delete the model file too (re-copied from the box next time).
+- **Not avoidable:** each computer needs the Click app once (it's what sees the screen and moves
+  the cursor). The HID mouse/keyboard alternative would be blind.
