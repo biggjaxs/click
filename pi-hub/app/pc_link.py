@@ -313,6 +313,7 @@ class PcLink:
         self._queues[msg["id"]] = q
         if service not in ("system",):
             self.audit.log("pc", f"{service}.{action}", _summary(payload))
+        finished = False
         try:
             await self.ws.send(json.dumps(msg))
             while True:
@@ -324,12 +325,20 @@ class PcLink:
                     if not final_only:
                         yield reply["payload"]
                     continue
+                finished = True
                 yield reply["payload"]
                 return
         except asyncio.TimeoutError as exc:
             raise PcError(f"Your computer did not answer in {int(timeout)} s ({service}.{action}).", "timeout") from exc
         finally:
             self._queues.pop(msg["id"], None)
+            if not finished and service == "inference" and self.ws:
+                # nobody wants this answer any more (e.g. a guess while typing): stop the AI so it's free
+                try:
+                    await self.ws.send(json.dumps(make_message("event", "inference", "cancel",
+                                                               {"request_id": msg["id"]})))
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def send_event(self, service: str, action: str, payload: dict) -> None:
         if self.connected and self.ws:

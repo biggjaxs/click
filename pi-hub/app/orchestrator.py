@@ -19,7 +19,7 @@ import time
 import uuid
 
 from .extract import is_image
-from . import language
+from . import language, quickmath
 from .intents import SCREENISH, is_summon, mentions_clicky, point_target, strip_clicky
 from .llm import BackendUnavailable
 from .memory import estimate_tokens
@@ -255,6 +255,7 @@ class Orchestrator:
         text = text.strip()
         incognito = bool(incognito_key)
         t_start = time.perf_counter()
+        typed_in = conversation_id  # the chat the words were typed in (None = a new chat), for the typing guess
         if not incognito and not conversation_id:
             conversation_id = self._new_conversation(text)
             await send({"type": "conversation", "id": conversation_id})
@@ -303,6 +304,12 @@ class Orchestrator:
                 log.exception("recall failed")
 
         point_note = quick
+        if point_note is None:
+            math_answer = quickmath.solve(text)
+            if math_answer:
+                point_note = Reply(math_answer)  # plain math: instant, no AI needed
+        if point_note is None and backend.source == "pc":
+            point_note = await self._use_speculation(typed_in, text)  # answered while you typed
         if point_note is None and backend.source == "pc" and mentions_clicky(text):
             point_note = await self._summon_clicky(text, send)
         if point_note is None:
@@ -502,6 +509,73 @@ class Orchestrator:
                 return Reply(f"I pointed at {name} but didn't click it: {exc}")
         return Reply(note or (f"Here's {name}" + (f" in the {where}" if where in ("Dock", "Menu bar", "Desktop")
                                                       else "") + ". Clicky is pointing at it."))
+
+    # ---- answering while you type -----------------------------------------------------------------------
+    # As you type a plain question, Click quietly works out the answer for what you've typed so far. If you
+    # press Enter on exactly that, the answer is already there (or already half done). Nothing is ever DONE
+    # on your computer before you press Enter: guesses only cover questions, never actions.
+    @staticmethod
+    def _spec_key(conv, text: str) -> tuple:
+        return (conv or 0, re.sub(r"[\s?.!]+$", "", " ".join(text.lower().split())))
+
+    def _speculable(self, text: str) -> bool:
+        deps = self.deps
+        t = text.strip()
+        if not deps.link.connected or len(t) < 2 or len(t) > 300 or len(t.split()) < 2 and not t.endswith("?"):
+            return False
+        if (quickmath.solve(t) or REMEMBER_RE.match(t) or FORGET_RE.match(t) or mentions_clicky(t)
+                or language.plan(t) or language.looks_like_command(t) or point_target(t) or SCREEN_INTENT.search(t)):
+            return False
+        return not select_tools(deps, t)  # questions needing files/web/screen wait for Enter
+
+    async def speculate(self, conversation_id: int | None, partial: str, send) -> None:
+        sp = getattr(self, "_spec", None)
+        key = self._spec_key(conversation_id, partial)
+        if sp and sp["key"] == key:
+            return
+        if sp and not sp["task"].done():
+            sp["task"].cancel()  # they kept typing: drop the old guess (the AI stops right away)
+        if not self._speculable(partial):
+            self._spec = None
+            return
+        sp = {"key": key, "text": partial, "answer": "", "done": False}
+        sp["task"] = asyncio.create_task(self._spec_run(sp, conversation_id, partial, send))
+        self._spec = sp
+
+    async def _spec_run(self, sp: dict, conv, text: str, send) -> None:
+        deps = self.deps
+        try:
+            recalled = await deps.memory.recall(text, 250 if self.fast else deps.cfg.memory_token_budget, conv)
+        except Exception:  # noqa: BLE001
+            recalled = {"core": [], "relevant": []}
+        messages = [{"role": "system", "content": self._system_prompt("pc", False)}]
+        messages += self._history(conv, None) if conv else []
+        messages.append({"role": "user", "content": f"{self._context_block(recalled, conv, False, None)}\n\n{text}"})
+        out: list[str] = []
+        last_sent = 0.0
+        async for ev in deps.pc_backend.chat_stream(messages, None, options={"num_predict": 220} if self.fast else {}):
+            if ev["type"] == "token":
+                out.append(ev["text"])
+                sp["answer"] = "".join(out)
+                if time.time() - last_sent > 0.15:  # a live preview under the box, a few times a second
+                    last_sent = time.time()
+                    await send({"type": "preview", "for": text, "text": sp["answer"]})
+        sp["done"] = True
+        await send({"type": "preview", "for": text, "text": sp["answer"], "done": True})
+
+    async def _use_speculation(self, conv, text: str) -> "Reply | None":
+        sp = getattr(self, "_spec", None)
+        if not sp or sp["key"] != self._spec_key(conv, text):
+            if sp and not sp["task"].done():
+                sp["task"].cancel()  # the guess was for different words: free the AI for the real question
+            self._spec = None
+            return None
+        self._spec = None
+        try:
+            await asyncio.wait_for(asyncio.shield(sp["task"]), timeout=90)
+        except Exception:  # noqa: BLE001 - the guess failed: answer normally
+            return None
+        return Reply(sp["answer"]) if sp["answer"].strip() else None
 
     async def prewarm(self, conversation_id: int | None, partial: str) -> None:
         """While the user types: have the model read the conversation so far, so pressing Enter only

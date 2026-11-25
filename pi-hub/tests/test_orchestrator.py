@@ -372,3 +372,35 @@ def test_open_notes_and_write_a_paragraph_is_composed_and_run(services):
     task = next(c for c in calls if c[:2] == ("skills", "run"))
     assert task[2]["plan"][-1] == {"skill": "new_note", "text": "Global warming harms people and nature."}
     assert "Global warming harms" in out["answer"]
+
+
+def test_math_is_instant(services):
+    _wire(services, {})
+    out = run(services.orchestrator.handle(send=Recorder(), text="what's 1 + 1?", conversation_id=None,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    assert out["answer"] == "1 + 1 = 2" and out["model"] == "clicky"
+    assert not [c for c in services.pc_backend.calls if c.get("fmt") != "json"] if hasattr(services.pc_backend, "calls") else True
+
+
+def test_answer_is_ready_while_typing(services):
+    _wire(services, {})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Paris."}]])
+    previews = Recorder()
+
+    async def go():
+        await services.orchestrator.speculate(None, "what is the capital of france", previews)
+        await asyncio.sleep(0.05)  # the user is still looking at the box...
+        return await services.orchestrator.handle(send=Recorder(), text="What is the capital of France?",
+                                                  conversation_id=None, upload_ids=[], incognito_key=None,
+                                                  state=_state())
+
+    out = run(go())
+    assert out["answer"] == "Paris."
+    assert len([c for c in services.pc_backend.calls if c.get("fmt") != "json"]) == 1  # worked out only once
+    assert any(e["type"] == "preview" for e in previews.events)
+
+
+def test_nothing_is_done_before_enter(services):
+    calls = _wire(services, {})
+    run(services.orchestrator.speculate(None, "open safari and close notes", Recorder()))
+    assert services.orchestrator._spec is None and not calls

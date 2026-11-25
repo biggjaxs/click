@@ -105,10 +105,10 @@ class QuickAsk(QWidget):
         # Read ahead while the user types (pressing Enter then only leaves a few words to process).
         self._typing = QTimer(self)
         self._typing.setSingleShot(True)
-        self._typing.setInterval(600)
+        self._typing.setInterval(350)  # start working on the answer as soon as you pause
         self._typing.timeout.connect(lambda: self.busy or self.link.send(
             {"type": "typing", "text": self.input.text(), "conversation_id": self.conversation_id}))
-        self.input.textEdited.connect(lambda _t: self._typing.start())
+        self.input.textEdited.connect(self._edited)
         self.input.setStyleSheet(
             "QLineEdit { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
             f" border-radius: 12px; padding: 10px 12px; font-size: 14px; selection-background-color: {accent}; }}"
@@ -151,6 +151,13 @@ class QuickAsk(QWidget):
         self.adjustSize()
 
     # ---- look: dark glass card with a soft accent glow ---------------------------------------------------
+    def _edited(self, _t: str):
+        self._typing.start()
+        if not self.busy and getattr(self, "_preview_for", None) and _norm(self.input.text()) != self._preview_for:
+            self._preview_for = None  # the preview was for different words
+            self.scroll.hide()
+            self.adjustSize()
+
     def _tick_goo(self):
         from .tile import reduce_motion
 
@@ -245,6 +252,15 @@ class QuickAsk(QWidget):
                 err = getattr(self, "hub_error", lambda: "")()
                 self.status.setText("Ready" if ev["ok"] else (f"Problem: {err[:120]}" if err else "Connecting to Click…"))
                 self.status.setWordWrap(True)
+        elif kind == "preview":
+            # the answer, worked out while you type; press Enter and it's there instantly
+            if not self.busy and _norm(ev.get("for", "")) == _norm(self.input.text()) and ev.get("text", "").strip():
+                self._preview_for = _norm(self.input.text())
+                self.out.setText(f"<span style='color:#94a3b8'><i>{_escape(ev['text'])}</i></span>"
+                                 + ("" if ev.get("done") else " <span style='color:#7dd3fc'>…</span>"))
+                self.chips.hide()
+                self.scroll.show()
+                self.adjustSize()
         elif kind == "conversation":
             self.conversation_id = ev.get("id")
         elif kind == "token":
@@ -307,6 +323,12 @@ def speak(text: str) -> None:
         _say = subprocess.Popen(["say", plain], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _norm(t: str) -> str:
+    import re
+
+    return re.sub(r"[\s?.!]+$", "", " ".join((t or "").lower().split()))
 
 
 def _escape(t: str) -> str:

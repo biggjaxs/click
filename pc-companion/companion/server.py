@@ -156,6 +156,7 @@ class CompanionServer:
         self.ws = ws
         self.app.on_pi_connection(True)
         tasks: set[asyncio.Task] = set()
+        by_id: dict[str, asyncio.Task] = {}
         try:
             async for raw in ws:
                 try:
@@ -164,13 +165,19 @@ class CompanionServer:
                     log.warning("bad message: %s", exc)
                     continue
                 if msg["type"] == "event":
+                    if (msg["service"], msg["action"]) == ("inference", "cancel"):
+                        t = by_id.get(str(msg["payload"].get("request_id")))
+                        if t and not t.done():
+                            t.cancel()  # closes the request to Ollama, which stops generating
+                        continue
                     self.app.on_pi_event(msg["service"], msg["action"], msg["payload"])
                     continue
                 if msg["type"] != "request":
                     continue
                 t = asyncio.create_task(self._dispatch(msg))
                 tasks.add(t)
-                t.add_done_callback(tasks.discard)
+                by_id[msg["id"]] = t
+                t.add_done_callback(lambda done, i=msg["id"]: (tasks.discard(done), by_id.pop(i, None)))
         except websockets.ConnectionClosed:
             pass
         finally:

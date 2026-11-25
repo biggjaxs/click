@@ -88,17 +88,30 @@ jobs:
           iconutil -c icns packaging/Click.iconset -o packaging/Click.icns
 
       - name: Load Click's signing certificate
+        env:
+          SIGN_P12: ${{ secrets.CLICK_SIGN_P12 }}
+          SIGN_PASSWORD: ${{ secrets.CLICK_SIGN_PASSWORD }}
+          SIGN_CERT: ${{ secrets.CLICK_SIGN_CERT }}
         run: |
           KC="$RUNNER_TEMP/click.keychain-db"
           security create-keychain -p ci "$KC"
           security set-keychain-settings -lut 21600 "$KC"
           security unlock-keychain -p ci "$KC"
-          security import packaging/signing/click-signing.p12 -k "$KC" -P click -T /usr/bin/codesign
+          if [ -n "$SIGN_P12" ]; then
+            # the signing key lives in a GitHub secret (never in the code)
+            echo "$SIGN_P12" | base64 --decode > "$RUNNER_TEMP/sign.p12"
+            security import "$RUNNER_TEMP/sign.p12" -k "$KC" -P "$SIGN_PASSWORD" -T /usr/bin/codesign
+            rm -f "$RUNNER_TEMP/sign.p12"
+          else
+            security import packaging/signing/click-signing.p12 -k "$KC" -P click -T /usr/bin/codesign
+          fi
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$KC" >/dev/null
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain \
             packaging/signing/cert.pem || echo "trust step skipped"
           ID=$(security find-identity -p codesigning "$KC" | awk '/Click Code Signing/ {print $2; exit}')
+          [ -n "$SIGN_CERT" ] && echo "$SIGN_CERT" > "$RUNNER_TEMP/cert.pem" && sudo security add-trusted-cert -d -r trustRoot \
+            -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem" || true
           echo "Signing identity: $ID"
           echo "CLICK_SIGN_ID=$ID" >> "$GITHUB_ENV"
 
