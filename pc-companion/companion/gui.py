@@ -84,6 +84,7 @@ class Bridge(QObject):
     indicator = Signal(str, bool)       # capture | watch | control | paused
     narrate = Signal(str)               # caption explaining what Click is doing right now
     toggleTile = Signal()
+    ghostRest = Signal()
     styleChanged = Signal()
     statusChanged = Signal()
     notify = Signal(str)
@@ -275,6 +276,7 @@ class GhostController(QObject):
         bridge.ghostMove.connect(self.move_to)
         bridge.ghostHighlight.connect(self.highlight)
         bridge.ghostHide.connect(self.hide)
+        bridge.ghostRest.connect(lambda: QTimer.singleShot(4000, self.rest))
         bridge.indicator.connect(self.set_indicator)
         bridge.narrate.connect(self.narrate)
         bridge.styleChanged.connect(self.repaint_all)
@@ -332,8 +334,7 @@ class GhostController(QObject):
     # ---- slots -------------------------------------------------------------------------------------
     def set_home(self, x: float, y: float):
         self.home = (x, y)
-        if self.docked:  # follow the orb if it's dragged; otherwise wait until the orb appears
-            self.dock()
+        pass  # the cursor appears from here when Click points at something
 
     def dock(self):
         """Park the cursor beside the orb, faded, so it's always on screen but out of the way."""
@@ -349,6 +350,7 @@ class GhostController(QObject):
 
     def move_to(self, x: float, y: float, label: str):
         self.docked = False
+        self._vanish_after_anim = False
         if self.visible:
             start = (self.x, self.y)
         else:  # appear at the chat tile and travel, so the movement is easy to follow
@@ -371,11 +373,20 @@ class GhostController(QObject):
         self.caption_until = time.time() + 6
 
     def hide(self):
-        """Done pointing: glide back to the dock beside the orb."""
+        """Done pointing: glide back to the orb and disappear."""
+        self.rest()
+
+    def rest(self):
         self.bubble = ""
         self.caption = ""
         self.highlights = []
-        self.dock()
+        if not self.visible:
+            return
+        if self.home:
+            self.move_to(*self.home, "")
+            self._vanish_after_anim = True
+        else:
+            self.visible = False
 
     def set_indicator(self, name: str, on: bool):
         if name == "capture":
@@ -419,6 +430,10 @@ class GhostController(QObject):
             if t >= 1:
                 self._anim = None
                 self.arrived_at = time.time()
+                if getattr(self, "_vanish_after_anim", False):
+                    self._vanish_after_anim = False
+                    self.visible = False
+                    self.docked = False
         self.repaint_all()
 
 

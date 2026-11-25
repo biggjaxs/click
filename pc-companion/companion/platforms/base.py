@@ -77,6 +77,10 @@ class Platform:
     def element_at(self, x: float, y: float) -> Element | None:
         return None
 
+    def dock_items(self) -> list[Element]:
+        """App icons in the Dock / taskbar."""
+        return []
+
     def menu_bar_items(self) -> list[Element]:
         """Items in the system menu bar / tray (Wi-Fi, battery, the app's File/Edit menus...)."""
         return []

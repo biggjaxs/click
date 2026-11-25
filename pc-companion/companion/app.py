@@ -129,6 +129,11 @@ class App:
 
         self.ask = QuickAsk(self.tile.url, self.settings["cursor"]["color"])
         self.ask.hub_error = lambda: self.hub.last_error if self.hub else ""
+        self.screen.own_rects = self._own_rects
+        if not self.selftest:
+            for w in (self.ask, self.tile):
+                w.winId()
+                self.platform.exclude_from_capture(w)
         self.ask.open_full.connect(lambda: (self.ask.hide(), self.toggle_tile() if not self.tile.isVisible() else None))
         self._started = time.time()
         self._watchdog = QTimer()
@@ -147,12 +152,29 @@ class App:
         else:
             self._onboard()
 
+    def _own_rects(self):
+        """Where Click's own windows are (in screen coordinates), so 'find' never points at them."""
+        from .platforms import Rect
+
+        out = []
+        for w in (self.ask, self.tile, self.bubble, getattr(self, "onboarding", None)):
+            if w is None or not w.isVisible():
+                continue
+            g = w.frameGeometry()
+            for o in self.ghost.overlays:
+                sg = o.smap.screen.geometry()
+                if sg.intersects(g):
+                    sc = o.smap.scale
+                    out.append(Rect(int(o.smap.left + (g.x() - sg.x()) * sc), int(o.smap.top + (g.y() - sg.y()) * sc),
+                                    int(g.width() * sc), int(g.height() * sc)))
+                    break
+        return out
+
     def _show_orb(self) -> None:
         if not self.selftest and not self.bubble.isVisible():
             self.bubble.show()
             self.platform.configure_overlay(self.bubble, click_through=False)  # float above every app, still clickable
             self._tile_moved()
-            self.ghost.dock()
 
     def _normal_launch(self) -> None:
         """Quiet start: the orb fades in with the cursor docked beside it, then Ask Click opens."""
@@ -420,6 +442,8 @@ class App:
             self.bridge.styleChanged.emit()
             self.bridge.indicator.emit("watch", bool(payload.get("watch_mode")) and not payload.get("paused"))
             self._set_paused(bool(payload.get("paused")), from_pi=True)
+        elif (service, action) == ("cursor", "rest"):
+            self.bridge.ghostRest.emit()
         elif (service, action) == ("cursor", "narrate"):
             self.bridge.narrate.emit(str(payload.get("text", ""))[:160])
         elif (service, action) == ("system", "pause"):

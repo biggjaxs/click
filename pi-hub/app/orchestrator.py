@@ -52,6 +52,10 @@ POINT_RE = re.compile(
     r"find|locate|show me)\s+(?:the |my |a )?(?P<t>.+?)(?:\s+(?:button|icon|menu|setting|settings|option|tab|link))?"
     r"(?:\s+(?:is|are))?(?:\s+on my (?:screen|computer|mac|laptop))?\s*[?.!]*$", re.I)
 
+# "open System Settings", "can you open safari for me"
+OPEN_RE = re.compile(r"^(?:can you |could you |please |hey click,? )*(?:open|launch|start|go to)\s+(?:the |my )?"
+                     r"(?P<t>.+?)(?:\s+(?:app|application))?(?:\s+for me)?(?:\s+please)?\s*[?.!]*$", re.I)
+
 SCREEN_INTENT = re.compile(
     r"\b(screen|window|monitor|on my (pc|computer|mac|laptop)|what am i (looking at|doing)|what('s| is) this|"
     r"this (error|page|message|window|app|popup|dialog)|where('s| is)|show me|point (at|to)|click (on|the)|"
@@ -301,15 +305,22 @@ class Orchestrator:
         else:
             asst_id = self._save_message(conversation_id, "assistant", answer, meta)
             self._spawn(self._after_reply(conversation_id, user_msg_id, asst_id, text, answer, bool(m_rem or m_forget)))
+        if deps.link.connected:
+            try:
+                await deps.link.send_event("cursor", "rest", {})
+            except Exception:  # noqa: BLE001
+                pass
         await send({"type": "done", "source": source, "model": model, "conversation_id": conversation_id,
                     "ms": total_ms, "first_ms": tool_log.get("first_ms")})
         return {"answer": answer, "source": source, "model": model, "ms": total_ms}
 
     async def _direct_point(self, text: str, send) -> str | None:
-        """'Show me where X is': find it and move Click's cursor there ourselves, reliably and fast,
-        instead of hoping a small model decides to call the tools. Returns a note for the model."""
+        """'Show me where X is' / 'open X': find X ourselves and move Click's cursor there (and for
+        'open', click it after the user's OK). Reliable and fast; doesn't depend on a small model
+        choosing tools. Returns a note for the model, or None if this isn't such a request."""
         deps = self.deps
-        m = POINT_RE.match(text.strip())
+        m_open = OPEN_RE.match(text.strip())
+        m = m_open or POINT_RE.match(text.strip())
         if not (m and deps.link.connected and deps.permissions.enabled("cursor")
                 and deps.permissions.enabled("screen_reading")):
             return None
@@ -331,16 +342,31 @@ class Orchestrator:
                     "sentence and say where it usually is.)")
         await send({"type": "tool", "name": "find_ui_element", "status": "done"})
         best = matches[0]
-        label = f"Here's {best.get('name') or target}"
+        name = best.get("name") or target
+        note = best.get("note") or ""
+        where = best.get("where") or ""
+        label = note or (f"Here's {name}" + (f" in the {where}" if where in ("Dock", "Menu bar") else ""))
         await send({"type": "tool", "name": "ghost_move", "status": "running"})
         try:
             await deps.link.request("cursor", "move", {"element_id": best["id"], "label": label}, timeout=20)
             await send({"type": "tool", "name": "ghost_move", "status": "done"})
         except PcError as exc:
             await send({"type": "tool", "name": "ghost_move", "status": "failed", "error": str(exc)})
-        deps.audit.log("input", "cursor.move", f"pointed at {best.get('name')!r} for '{target}'")
-        return (f"(You already moved your cursor to '{best.get('name')}' ({best.get('role', '')}) on the user's screen "
-                f"to show them '{target}'. Tell them in one or two short sentences what it is and what to do with it. "
+        deps.audit.log("input", "cursor.move", f"pointed at {name!r} ({where}) for '{target}'")
+        if m_open and not note and deps.permissions.enabled("input_actions"):
+            await send({"type": "tool", "name": "click", "status": "running", "caption": f"Opening {name} - waiting for your OK"})
+            try:
+                res = await deps.link.request("cursor", "click", {"element_id": best["id"], "description": f"Open {name}",
+                                                                  "risk": "change", "task_id": "open"},
+                                              timeout=150, requires_confirmation=True)
+                await send({"type": "tool", "name": "click", "status": "done"})
+                return (f"(You found '{name}' ({where}) and clicked it to open it: {res.get('status')}. Confirm in one "
+                        "short sentence. Don't call any tools.)")
+            except PcError as exc:
+                await send({"type": "tool", "name": "click", "status": "failed", "error": str(exc)})
+                return f"(You pointed at '{name}' but didn't click it: {exc}. Say so in one sentence. Don't call tools.)"
+        return (f"(You already moved your cursor to '{name}'" + (f" in the {where}" if where else "") +
+                f" to show the user '{target}'. {note} Tell them in one or two short sentences what it is and what to do. "
                 "Don't call any tools.)")
 
     async def prewarm(self, conversation_id: int | None, partial: str) -> None:

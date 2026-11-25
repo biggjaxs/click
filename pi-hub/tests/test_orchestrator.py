@@ -263,3 +263,29 @@ def test_show_me_where_moves_the_cursor_without_relying_on_the_model(services):
     first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
     assert first["tools"] is None and "moved your cursor" in first["messages"][-1]["content"]
     assert out["answer"] == "That's your Wi-Fi menu."
+
+
+def test_open_app_points_then_clicks_after_ok(services):
+    services.link.connected = True
+    services.link.capabilities = {"cpu_only": True}
+    calls = []
+
+    async def fake_request(service, action, payload, **kw):
+        calls.append((service, action, payload))
+        if action == "find_ui_element":
+            return {"matches": [{"id": "e3", "name": "System Settings", "role": "DockItem", "where": "Dock"}]}
+        return {"status": "clicked"}
+
+    async def fake_event(*a, **k):
+        calls.append(("event",) + a)
+
+    services.link.request = fake_request
+    services.link.send_event = fake_event
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Opened System Settings."}]])
+    run(services.orchestrator.handle(send=Recorder(), text="open system settings", conversation_id=None,
+                                     upload_ids=[], incognito_key=None, state=_state()))
+    kinds = [c[:2] for c in calls]
+    assert ("screen", "find_ui_element") in kinds and ("cursor", "move") in kinds and ("cursor", "click") in kinds
+    move = next(c for c in calls if c[:2] == ("cursor", "move"))
+    assert "Dock" in move[2]["label"]
+    assert ("event", "cursor", "rest", {}) in calls  # the cursor goes home after the answer

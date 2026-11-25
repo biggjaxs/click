@@ -119,6 +119,22 @@ class MacPlatform(Platform):
                                window_title=window.title))
         return out
 
+    def dock_items(self) -> list[Element]:
+        """App icons in the Dock, so "show me System Settings" can point at its icon."""
+        dock = [a for a in NSWorkspace.sharedWorkspace().runningApplications()
+                if (a.bundleIdentifier() or "") == "com.apple.dock"]
+        if not dock:
+            return []
+        out: list[Element] = []
+        app = AXUIElementCreateApplication(dock[0].processIdentifier())
+        for lst in _attr(app, "AXChildren") or []:
+            for el in _attr(lst, "AXChildren") or []:
+                title = _attr(el, "AXTitle") or ""
+                rect = _rect_of(el)
+                if title and rect:
+                    out.append(Element(name=str(title), role="DockItem", rect=rect, window_title="Dock"))
+        return out
+
     def menu_bar_items(self) -> list[Element]:
         """Menu bar icons (Wi-Fi, battery, sound, Control Center...) and the front app's menus."""
         ws = NSWorkspace.sharedWorkspace()

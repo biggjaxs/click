@@ -63,11 +63,13 @@ class LiquidBubble(QWidget):
         return path
 
     def paintEvent(self, _):
-        target = {"idle": 0.0, "starting": 0.5, "thinking": 1.0, "acting": 1.0, "error": 0.2,
+        target = {"idle": 0.0, "starting": 0.1, "thinking": 0.35, "acting": 0.35, "error": 0.1,
                   "paused": 0.0}.get(self.state, 0.0)
         self._energy += (target - self._energy) * 0.08
         e = self._energy
-        t = (time.time() - self._t0) * (1 + 1.8 * e)
+        # Calm at all times: thinking only makes it glow a little brighter, never spin faster.
+        self._phase = getattr(self, "_phase", 0.0) + 0.033 * (1 + 0.25 * e)
+        t = self._phase
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         c = QPointF(SIZE / 2, SIZE / 2)
@@ -103,13 +105,6 @@ class LiquidBubble(QWidget):
         shine.setColorAt(1.0, QColor(255, 255, 255, 0))
         p.setBrush(shine)
         p.drawPath(self._blob(c, r * 0.92, t + 0.6, e))
-        # thinking: an orbiting spark
-        if e > 0.05:
-            a = t * 2.4
-            spark = QPointF(c.x() + r * 1.18 * math.cos(a), c.y() + r * 1.18 * math.sin(a))
-            s = QColor(255, 255, 255, int(220 * min(1.0, e)))
-            p.setBrush(s)
-            p.drawEllipse(spark, 2.6, 2.6)
         if self.state == "error":
             p.setPen(QPen(QColor("white"), 2.4, Qt.SolidLine, Qt.RoundCap))
             p.drawLine(QPointF(c.x(), c.y() - 7), QPointF(c.x(), c.y() + 2))

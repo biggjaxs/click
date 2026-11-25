@@ -69,10 +69,50 @@ def _grab(rect: Rect) -> Image.Image:
         raise ScreenError(f"Could not take a screenshot: {exc}") from exc
 
 
+SYNONYMS = {"system preferences": "system settings", "settings app": "system settings", "wifi": "wi-fi",
+            "wi fi": "wi-fi", "control centre": "control center", "trash can": "trash", "bin": "trash",
+            "file explorer": "finder", "files": "finder", "app store": "app store", "browser": "safari"}
+
+
+def _norm(t: str) -> str:
+    import re
+
+    t = re.sub(r"[…\.\u2026:]+$", "", (t or "").lower()).strip()
+    t = re.sub(r"\s+", " ", t)
+    return SYNONYMS.get(t, t)
+
+
+def _score(q: str, name: str) -> float:
+    if not name:
+        return 0.0
+    if name == q:
+        return 1.0
+    if len(name) >= 3 and (q in name or name in q):
+        return 0.9 if len(name) - len(q) < 15 else 0.75
+    return difflib.SequenceMatcher(None, q, name).ratio()
+
+
+def _overlaps(a: Rect, b: Rect) -> bool:
+    return a.x < b.x + b.w and b.x < a.x + a.w and a.y < b.y + b.h and b.y < a.y + a.h
+
+
+def _installed_app(q: str) -> bool:
+    import sys as _sys
+
+    if _sys.platform != "darwin":
+        return False
+    from pathlib import Path as _P
+
+    name = q.title() + ".app"
+    return any((_P(d) / name).exists() for d in ("/Applications", "/System/Applications",
+                                                   "/System/Applications/Utilities"))
+
+
 class ScreenService:
     def __init__(self, platform: Platform, settings):
         self.platform = platform
         self.settings = settings
+        self.own_rects = lambda: []  # set by the app: where Click's own windows are
         self.elements = ElementCache()
         self._ocr = None
 
@@ -224,46 +264,75 @@ class ScreenService:
         return {"window": win.public(), "elements": self._elements_payload(els)}
 
     def find_ui_element(self, query: str, window: str | None = None, **_) -> dict:
-        """Find a button/menu/icon by name: accessibility tree first, then visible text (OCR)."""
-        wins = [self._find_window(window)] if window else [w for w in self.platform.list_windows()[:6]]
-        q = query.lower().strip()
-        scored = []
-        for win in wins:
+        """Find something the user asked about. Looks, in order, at: the Dock (apps), the menu bar
+        (Wi-Fi, battery, app menus), buttons in open windows, then visible text on screen.
+        Click's own windows (the chat, the orb) are never matched."""
+        q = _norm(query)
+        own = self.own_rects()
+        scored: list[tuple[float, Element]] = []
+
+        def add(el: Element, boost: float = 0.0):
+            if any(_overlaps(el.rect, r) for r in own):
+                return  # never point at Click's own chat (it contains the user's question!)
+            score = _score(q, _norm(el.name))
+            if score >= 0.6:
+                scored.append((min(1.0, score + boost), el))
+
+        for getter, boost in ((self.platform.dock_items, 0.04), (self.platform.menu_bar_items, 0.02)):
+            try:
+                for el in getter():
+                    add(el, boost)
+            except Exception:  # noqa: BLE001
+                pass
+        wins = [self._find_window(window)] if window else self.platform.list_windows()[:6]
+        for i, win in enumerate(wins):
             if self._blocked(win):
                 continue
             for el in self.platform.ui_elements(win):
-                name = el.name.lower()
-                if not name:
-                    continue
-                score = 1.0 if name == q else 0.9 if q in name else difflib.SequenceMatcher(None, q, name).ratio()
-                if score >= 0.55:
-                    scored.append((score - 0.05 * wins.index(win), el))
-        try:  # the menu bar (Wi-Fi, battery, sound, app menus) isn't inside any window
-            for el in self.platform.menu_bar_items():
-                name = el.name.lower()
-                score = 1.0 if name == q else 0.92 if q in name or name in q else \
-                    difflib.SequenceMatcher(None, q, name).ratio()
-                if score >= 0.6:
-                    scored.append((score, el))
-        except Exception:  # noqa: BLE001
-            pass
+                if el.name:
+                    add(el, -0.03 * i)
         source = "accessibility"
-        if not scored or scored and max(sc for sc, _ in scored) < 0.85:
-            scored += self._find_by_text(q)
-            source = "screen text" if not any(sc >= 0.85 for sc, _ in scored[:1]) else source
+        if not scored or max(sc for sc, _ in scored) < 0.85:
+            for sc, el in self._find_by_text(q):
+                if not any(_overlaps(el.rect, r) for r in own):
+                    scored.append((sc, el))
+            source = "screen text"
+        if not scored or max(sc for sc, _ in scored) < 0.85:
+            fallback = self._app_fallback(q)
+            if fallback:
+                scored.append(fallback)
+                source = "app launcher"
         scored.sort(key=lambda s: s[0], reverse=True)
-        found = self._elements_payload([el for _, el in scored[:8]])
+        found = self._elements_payload([el for _, el in scored[:6]])
         for item, (score, el) in zip(found, scored):
             item["match"] = round(score, 2)
-            item["window"] = el.window_title
+            item["where"] = el.window_title
+            if el.extra.get("note"):
+                item["note"] = el.extra["note"]
         out = {"query": query, "matches": found, "found_by": source,
-               "hint": "Use the id with ghost_move/click." if found else "Nothing found. Try get_screen or another name."}
+               "hint": "Use the id with ghost_move/click." if found else "Nothing found on screen."}
         problems = self.platform.check_permissions()
         if problems and not found:
             out["permission_problem"] = " ".join(problems)
-            out["hint"] = ("Click can't read this computer's buttons until the user allows it: " + " ".join(problems)
-                           + " Tell the user exactly this.")
         return out
+
+    def _app_fallback(self, q: str):
+        """An app that isn't in the Dock: point at the Apple menu (System Settings) or Spotlight."""
+        try:
+            items = self.platform.menu_bar_items()
+        except Exception:  # noqa: BLE001
+            return None
+        if q in ("system settings", "settings", "system preferences", "preferences"):
+            apple = next((el for el in items if _norm(el.name) in ("apple", "apple menu")), None)
+            if apple:
+                apple.extra["note"] = "System Settings is in the Apple menu: click it, then System Settings."
+                return (0.8, apple)
+        if _installed_app(q):
+            spot = next((el for el in items if "spotlight" in _norm(el.name)), None)
+            if spot:
+                spot.extra["note"] = f"{q.title()} isn't in the Dock. Open Spotlight here and type its name."
+                return (0.7, spot)
+        return None
 
     def _find_by_text(self, q: str) -> list:
         """Locate visible text on the monitor the user is working on."""

@@ -225,3 +225,13 @@ Pi, auto-start on box detection, and wipe-on-unplug.
 - **First-launch welcome:** Meet Click, the cursor demo, permissions, setup with progress, then
   ready. Later launches are quiet: the orb, the docked cursor and Ask Click.
 - **The full chat is dark glass** like the orb, with a live mini-orb in its header.
+
+## Built in version 1.7
+- **Pointing finds the real thing.** Find checks the Dock (apps) first, then the menu bar, window
+  buttons, then on-screen text. It never matches Click's own windows, which are also kept out of
+  Click's screenshots. (Fixes "it pointed at my question in the chat".) An app not in the Dock gets
+  the Apple menu (System Settings) or Spotlight, with an explanation.
+- **"Open X"** finds X, points at it, and clicks it after your OK.
+- After every answer the cursor glides back to the orb and fades away.
+- The orb stays calm while thinking (a soft glow, no spinning).
+- The full chat is liquid glass: drifting light, a flowing violet/cyan edge, and an orb send button.

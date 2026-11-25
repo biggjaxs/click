@@ -265,8 +265,12 @@ class Tile(QWidget):
         self.setMinimumSize(320, 360)
         self.frame = QWidget(self)
         self.frame.setObjectName("frame")
-        self.frame.setStyleSheet("QWidget#frame { background: rgba(17,17,22,0.96); border: 1px solid "
-                                 "rgba(109,93,252,0.45); border-radius: 20px; } QLabel { color: #f4f4f5; }")
+        # The tile paints its own liquid glass (see paintEvent); the frame and the page are see-through.
+        self.frame.setStyleSheet("QWidget#frame { background: transparent; } QLabel { color: #f4f4f5; }")
+        self._glow_t = 0.0
+        self._glow = QTimer(self)
+        self._glow.timeout.connect(self._tick_glow)
+        self._glow.start(80)  # slow, gentle motion; light on the processor
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(self.frame)
@@ -295,7 +299,9 @@ class Tile(QWidget):
 
         self.web = QWebEngineView()
         self.web.setPage(Page(profile, self.web))
-        self.web.page().setBackgroundColor(QColor(17, 17, 22))
+        self.web.page().setBackgroundColor(Qt.transparent)
+        self.web.setAttribute(Qt.WA_TranslucentBackground)
+        self.web.setStyleSheet("background: transparent;")
         self.web.loadFinished.connect(self._loaded)
         self.web.page().renderProcessTerminated.connect(
             lambda status, code: __import__("logging").getLogger("click.tile").error(
@@ -310,6 +316,49 @@ class Tile(QWidget):
         lay.addLayout(grip_row)
         self.resize(TILE_W, TILE_H)
         self.place_top_right()
+
+    # ---- liquid glass look ------------------------------------------------------------------------------
+    def _tick_glow(self):
+        if self.isVisible():
+            self._glow_t += 0.08
+            self.update()
+
+    def paintEvent(self, _):
+        import math
+
+        from PySide6.QtGui import QConicalGradient, QRadialGradient
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        path = QPainterPath()
+        path.addRoundedRect(r, 24, 24)
+        p.fillPath(path, QColor(13, 13, 18, 238))
+        t = self._glow_t
+        accent = QColor(self.accent)
+        # two soft blobs of light drifting slowly inside the glass, like the orb's liquid
+        for cx, cy, rad, col, ph in ((0.25, 0.12, 0.75, accent, 0.0), (0.85, 0.95, 0.65, QColor("#22d3ee"), 2.1)):
+            c = QPointF(r.width() * (cx + 0.06 * math.sin(t * 0.5 + ph)), r.height() * (cy + 0.04 * math.cos(t * 0.4 + ph)))
+            g = QRadialGradient(c, r.width() * rad)
+            col = QColor(col)
+            col.setAlpha(46)
+            g.setColorAt(0, col)
+            g.setColorAt(1, QColor(0, 0, 0, 0))
+            p.save()
+            p.setClipPath(path)
+            p.fillRect(r, g)
+            p.restore()
+        # a glowing edge whose colours slowly flow around the window
+        edge = QConicalGradient(r.center(), (t * 12) % 360)
+        a1, a2 = QColor(accent), QColor("#22d3ee")
+        a1.setAlpha(170)
+        a2.setAlpha(150)
+        edge.setColorAt(0.0, a1)
+        edge.setColorAt(0.5, a2)
+        edge.setColorAt(1.0, a1)
+        p.setPen(QPen(edge, 1.6))
+        p.drawPath(path)
+        p.end()
 
     # ---- window behaviour ------------------------------------------------------------------------------
     def place_top_right(self):

@@ -115,3 +115,40 @@ def test_runs_on_this_computer_unless_a_box_was_really_paired():
     assert mode(half) == "standalone"
     real_box = type("X", (), {"settings": S(mode="box", box_paired=True, pi_cert_pem="CERT")})()
     assert mode(real_box) == "box"
+
+
+def test_find_prefers_dock_app_and_never_points_at_clicks_own_chat():
+    """Regression: 'show me where system settings is' pointed at Click's own chat (which contained the words)."""
+    from companion.platforms import Element, Platform, Rect
+    from companion.screen import ScreenService
+
+    chat = Rect(1100, 80, 400, 300)
+
+    class FakeMac(Platform):
+        def dock_items(self):
+            return [Element("Finder", "DockItem", Rect(400, 940, 50, 50), window_title="Dock"),
+                    Element("System Settings", "DockItem", Rect(800, 940, 50, 50), window_title="Dock")]
+
+        def menu_bar_items(self):
+            return [Element("Apple", "MenuBarItem", Rect(10, 0, 20, 24), window_title="Menu bar")]
+
+        def list_windows(self):
+            return []
+
+    s = ScreenService(FakeMac(), {"blocklist": []})
+    s.own_rects = lambda: [chat]
+    s._find_by_text = lambda q: [(1.0, Element("system settings", "Text", Rect(1150, 120, 120, 16)))]  # in the chat
+    res = s.find_ui_element("system settings")
+    assert res["matches"][0]["name"] == "System Settings" and res["matches"][0]["where"] == "Dock"
+    assert all(m["rect"][0] < 1100 for m in res["matches"])  # nothing inside Click's chat
+
+    # not in the Dock -> the Apple menu, with a note
+    class NoDock(FakeMac):
+        def dock_items(self):
+            return []
+
+    s2 = ScreenService(NoDock(), {"blocklist": []})
+    s2.own_rects = lambda: [chat]
+    s2._find_by_text = lambda q: [(1.0, Element("system settings", "Text", Rect(1150, 120, 120, 16)))]
+    res2 = s2.find_ui_element("system settings")
+    assert res2["matches"][0]["name"] == "Apple" and "Apple menu" in res2["matches"][0]["note"]
