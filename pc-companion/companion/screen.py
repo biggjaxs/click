@@ -389,7 +389,10 @@ class ScreenService:
             return []
         sx, sy = rect.w / img.width, rect.h / img.height
         hits = []
-        for ln in recognize(img, fast=False):
+        lines = recognize(img, fast=True)  # Apple's fast reader first (made for real-time use)
+        if not any(q in ln["text"].lower() for ln in lines):
+            lines = recognize(img, fast=False)  # not seen: read again carefully
+        for ln in lines:
             t = ln["text"].lower().strip()
             if not t:
                 continue

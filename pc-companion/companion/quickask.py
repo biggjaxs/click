@@ -113,6 +113,22 @@ class QuickAsk(QWidget):
             "QLineEdit { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
             f" border-radius: 12px; padding: 10px 12px; font-size: 14px; selection-background-color: {accent}; }}"
             f"QLineEdit:focus {{ border-color: {accent}; }}")
+        # One-tap ideas: each uses Clicky's instant paths, so it answers in about a second.
+        self.chips = QWidget()
+        chip_row = QHBoxLayout(self.chips)
+        chip_row.setContentsMargins(0, 0, 0, 0)
+        chip_row.setSpacing(6)
+        for label, ask in (("Where's Wi\u2011Fi?", "where is wifi"), ("Open Notes", "open notes"),
+                           ("Hi Clicky", "show me clicky")):
+            c = QPushButton(label)
+            c.setCursor(Qt.PointingHandCursor)
+            c.setStyleSheet("QPushButton { background: rgba(34,211,238,0.10); color: #e0faff; border: 1px solid "
+                            "rgba(34,211,238,0.35); border-radius: 11px; padding: 4px 9px; font-size: 11.5px; }"
+                            "QPushButton:hover { background: rgba(34,211,238,0.22); }")
+            c.clicked.connect(lambda _=False, q=ask: (self.input.setText(q), self._send()))
+            c.setMinimumWidth(c.fontMetrics().horizontalAdvance(label) + 26)
+            chip_row.addWidget(c)
+        chip_row.addStretch()
         foot = QHBoxLayout()
         self.full = QPushButton("Open full chat")
         self.new = QPushButton("New question")
@@ -128,6 +144,7 @@ class QuickAsk(QWidget):
         foot.addWidget(self.new)
         foot.addWidget(self.full)
         lay.addWidget(self.input)
+        lay.addWidget(self.chips)
         lay.addWidget(self.scroll)
         lay.addLayout(self.actions)
         lay.addLayout(foot)
@@ -138,6 +155,9 @@ class QuickAsk(QWidget):
         if self.isVisible():
             self._goo_t += 0.08
             self.update()
+            if self.busy and not self.answer:  # "Clicky is thinking..." until the first word arrives
+                n = int(self._goo_t * 2.5) % 4
+                self.out.setText(f"<span style='color:#7dd3fc'>Clicky is thinking{'.' * n}</span>")
 
     def paintEvent(self, _):
         from PySide6.QtCore import QRectF
@@ -181,6 +201,7 @@ class QuickAsk(QWidget):
         self.conversation_id = None
         self.answer = ""
         self.out.setText("")
+        self.chips.show()
         self.scroll.hide()
         self._clear_actions()
         self.adjustSize()
@@ -200,7 +221,8 @@ class QuickAsk(QWidget):
         self.answer = ""
         self.input.clear()
         self.input.setPlaceholderText("Click is thinking…")
-        self.out.setText(f"<span style='color:#a1a1aa'>{_escape(text)}</span>")
+        self.out.setText("<span style='color:#7dd3fc'>Clicky is thinking</span>")
+        self.chips.hide()
         self.scroll.show()
         self.status.setText("Thinking…")
         self.adjustSize()
@@ -256,7 +278,30 @@ class QuickAsk(QWidget):
             self.status.setText(f"Answered in {ms / 1000:.1f} s" if ms else "Ready")
             if not self.answer.strip():
                 self.out.setText("(No answer. Open the full chat for details.)")
+            elif getattr(self, "speak_enabled", lambda: False)():
+                speak(self.answer)
             self.adjustSize()
+
+
+_say = None
+
+
+def speak(text: str) -> None:
+    """Read an answer aloud with the Mac's own offline voice (Settings > Accessibility > Spoken Content)."""
+    global _say
+    import re
+    import subprocess
+    import sys
+
+    if sys.platform != "darwin":
+        return
+    plain = re.sub(r"[*_`#>\[\]()]", "", text)[:600]
+    try:
+        if _say and _say.poll() is None:
+            _say.terminate()
+        _say = subprocess.Popen(["say", plain], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _escape(t: str) -> str:

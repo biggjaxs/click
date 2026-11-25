@@ -9,7 +9,7 @@ from typing import Awaitable, Callable
 import httpx
 
 
-KEEP_ALIVE = "30m"  # keep the model loaded between questions (reloading costs seconds); freed after 30 idle min
+KEEP_ALIVE = "24h"  # keep the model loaded all day: reloading it after a break costs many seconds
 def _physical_cores() -> int:
     """The AI engine runs fastest with one thread per REAL core. Intel chips report twice as many
     (hyper-threading); using those extra threads makes answers slower, not faster. A 2018 i9 = 6."""

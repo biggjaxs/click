@@ -133,6 +133,7 @@ class App:
 
         self.ask = QuickAsk(self.tile.url, self.settings["cursor"]["color"])
         self.ask.hub_error = lambda: self.hub.last_error if self.hub else ""
+        self.ask.speak_enabled = lambda: bool(self.settings.get("speak_answers", False))
         self.screen.own_rects = self._own_rects
         if not self.selftest:
             for w in (self.ask, self.tile):

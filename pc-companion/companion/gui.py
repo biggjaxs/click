@@ -59,6 +59,19 @@ def match_screens(qgeoms: list[tuple[int, int, int, int, float]], mons: list[dic
     return out
 
 
+def _pop() -> None:
+    """A soft, quiet "pop" when Clicky lands on something (macOS system sound; silent elsewhere)."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import subprocess
+
+        subprocess.Popen(["afplay", "-v", "0.25", "/System/Library/Sounds/Pop.aiff"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _ease(t: float) -> float:
     return 4 * t * t * t if t < 0.5 else 1 - pow(-2 * t + 2, 3) / 2
 
@@ -454,11 +467,17 @@ class GhostController(QObject):
             a = self._anim
             t = min(1.0, (time.time() - a["t0"]) / a["dur"])
             e = _ease(t)
-            self.x = a["from"][0] + (a["to"][0] - a["from"][0]) * e
-            self.y = a["from"][1] + (a["to"][1] - a["from"][1]) * e
+            # fly along a gentle curve (a lifted arc), like a hand moving, not a straight robotic line
+            (x0, y0), (x1, y1) = a["from"], a["to"]
+            dist = math.hypot(x1 - x0, y1 - y0)
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2 - min(160.0, dist * 0.22)
+            self.x = (1 - e) ** 2 * x0 + 2 * (1 - e) * e * cx + e ** 2 * x1
+            self.y = (1 - e) ** 2 * y0 + 2 * (1 - e) * e * cy + e ** 2 * y1
             if t >= 1:
                 self._anim = None
                 self.arrived_at = time.time()
+                if not getattr(self, "_vanish_after_anim", False) and dist > 30:
+                    _pop()
                 if getattr(self, "_vanish_after_anim", False):
                     self._vanish_after_anim = False
                     self.visible = False
@@ -760,6 +779,11 @@ class Tray(QObject):
         check = QAction("Check Clicky…")
         check.triggered.connect(app_ctl.check_clicky)
         menu.addAction(check)
+        self.speak_action = QAction("Read answers aloud")
+        self.speak_action.setCheckable(True)
+        self.speak_action.setChecked(bool(app_ctl.settings.get("speak_answers", False)))
+        self.speak_action.toggled.connect(lambda on: app_ctl.settings.set("speak_answers", bool(on)))
+        menu.addAction(self.speak_action)
         welcome = QAction("Show the welcome again")
         welcome.triggered.connect(lambda: (app_ctl.settings.set("welcome_version", ""), app_ctl._onboard()))
         menu.addAction(welcome)
