@@ -139,6 +139,30 @@ def main() -> int:
              and "uvicorn.access" not in ln and "httpx: HTTP Request" not in ln]
     print("\n".join(lines[-150:]))
     if problems:
+        for name in ("crash.log", "crash-previous.log"):
+            f = sd / name
+            if f.exists() and f.stat().st_size:
+                print(f"---- {name} ----")
+                print(f.read_text(errors="replace")[-12000:])
+        for folder in (Path.home() / "Library/Logs/DiagnosticReports", home / "Library/Logs/DiagnosticReports"):
+            reports = sorted(folder.glob("Click*"), key=lambda q: q.stat().st_mtime)[-1:] if folder.exists() else []
+            for r in reports:
+                if r.stat().st_mtime < t0:
+                    continue
+                txt = r.read_text(errors="replace")
+                print(f"---- macOS crash report {r.name} ----")
+                try:  # .ips: a JSON header line, then JSON with the crashed thread's frames
+                    body = json.loads(txt.split("\n", 1)[1])
+                    print("exception:", body.get("exception"), "termination:", body.get("termination"))
+                    print("asi:", body.get("asi"))
+                    imgs = body.get("usedImages", [])
+                    for th in body.get("threads", []):
+                        if th.get("triggered"):
+                            for fr in th.get("frames", [])[:40]:
+                                img = imgs[fr.get("imageIndex", 0)].get("name", "?") if imgs else "?"
+                                print(f"   {img:28s} {fr.get('symbol', '?')}")
+                except Exception:  # noqa: BLE001
+                    print(txt[:6000])
         ok = False
         for pr in problems:
             print("PROBLEM:", pr)
