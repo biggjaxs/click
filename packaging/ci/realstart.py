@@ -134,6 +134,10 @@ def main() -> int:
                 os.killpg(p.pid, signal.SIGKILL)
             except Exception:  # noqa: BLE001
                 pass
+    if sys.platform == "darwin":
+        left = subprocess.run(["pgrep", "-f", "Click.app/Contents/MacOS/Click"], capture_output=True, text=True).stdout.split()
+        if left:
+            problems.append(f"other Click copies still running after the test: {left}")
     print("---- end of Click's log ----")
     lines = [ln for ln in log_text().splitlines() if "zeroconf" not in ln and "No route to host" not in ln
              and "uvicorn.access" not in ln and "httpx: HTTP Request" not in ln]

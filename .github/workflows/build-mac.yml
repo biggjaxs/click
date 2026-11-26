@@ -157,6 +157,10 @@ jobs:
           python packaging/ci/realstart.py --app dist/Click.app/Contents/MacOS/Click --home "$HOME/selftest" --seconds 60
           echo "--- normal start, with the companion brain running ---"
           python packaging/ci/realstart.py --app dist/Click.app/Contents/MacOS/Click --home "$HOME/selftest" --seconds 120 --version "$ver"
+          echo "--- an older Click is still running when a new one opens: the new one must take over ---"
+          HOME="$HOME/selftest" CLICK_CI_REALSTART=1 dist/Click.app/Contents/MacOS/Click > old-copy.log 2>&1 &
+          sleep 25
+          python packaging/ci/realstart.py --app dist/Click.app/Contents/MacOS/Click --home "$HOME/selftest" --seconds 60 --version "$ver"
 
       - name: Make the .dmg
         run: |

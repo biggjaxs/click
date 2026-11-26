@@ -9,6 +9,7 @@ import logging
 import os
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -342,6 +343,46 @@ class App:
         if self.tile.isVisible():
             self.tile.show_chat()
 
+    def _heal_link(self) -> None:
+        """The chat part must be connected to this computer part. If it isn't after ~25 seconds, fix it:
+        close any other Click that holds the connection point and pair the two parts again."""
+        if self.mode != "standalone" or not self.hub or self.paused or self.selftest:
+            return
+        now = time.time()
+        if self.server.pi_connected:
+            self._unlinked_since = None
+            return
+        if not getattr(self, "_unlinked_since", None):
+            self._unlinked_since = now
+        if now - self._unlinked_since < 15 or now - getattr(self, "_last_heal", 0) < 30 \
+                or getattr(self, "_healing", False):
+            return
+        self._last_heal, self._healing = now, True
+
+        def heal():
+            import httpx
+
+            try:
+                try:
+                    reason = httpx.get(f"{self.hub.url}/api/status", timeout=5).json()["pc"].get("last_error", "")
+                except Exception as exc:  # noqa: BLE001
+                    reason = f"chat part not answering: {exc}"
+                log.warning("Chat isn't connected to Clicky (%s); repairing the link", reason or "no reason given")
+                self._link_problem = reason
+                _close_other_copies()
+                self.settings.set("standalone_paired", False)
+                cert = self.hub.ensure_paired(self.server.identity.cert, self.settings["pc_id"],
+                                              self.settings["pc_name"], self.settings["port"])
+                if cert:
+                    self.settings.set("pi_cert_pem", cert)
+                self.server.restart_tls()
+            except Exception:  # noqa: BLE001
+                log.exception("link repair failed")
+            finally:
+                self._healing = False
+
+        threading.Thread(target=heal, name="click-heal", daemon=True).start()
+
     def _update_status(self) -> None:
         """Header shows the truth: Ready / Starting / Paused, plus how much memory the AI is using."""
         import httpx
@@ -350,7 +391,8 @@ class App:
             self.tile.header.set_status("Paused", "#a1a1aa")
             return
         if not self.server.pi_connected:
-            self.tile.header.set_status("Starting…", "#a1a1aa")
+            waited = time.time() - (getattr(self, "_unlinked_since", None) or time.time())
+            self.tile.header.set_status("Starting…" if waited < 15 else "Reconnecting…", "#a1a1aa")
             return
         gb = 0.0
         try:
@@ -393,6 +435,7 @@ class App:
                 self._after_hub_start()
             return
         self._tick = getattr(self, "_tick", 0) + 1
+        self._heal_link()
         if self._tick % 5 == 1 and self.tile:
             self._update_status()
         if self.paused:
@@ -1087,39 +1130,46 @@ def _bundle_path():
 
 
 def _close_other_copies() -> None:
-    """If another Click is running from a DIFFERENT place (an old copy), close it so this one takes over.
-    Otherwise opening the new version would just bring back the old one."""
+    """Close every OTHER running Click (an older version, a copy from the disk image or Downloads, or one
+    left behind by an update). Two copies fight over the same connection point: the new one then shows
+    "Starting..." forever and its questions go to the old one. Only one Click may run."""
     import os
     import signal
-    import subprocess
     import time as _t
 
-    me = _bundle_path()
-    if not me:
-        return
-    try:
-        out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=5).stdout
-    except Exception:  # noqa: BLE001
-        return
-    victims = []
-    for line in out.splitlines():
-        pid_s, _, cmd = line.strip().partition(" ")
-        if "Click.app/Contents/MacOS/Click" in cmd and pid_s.isdigit() and int(pid_s) != os.getpid():
-            if not cmd.startswith(str(me) + "/"):
-                victims.append(int(pid_s))
+    victims = _other_click_pids()
     for pid in victims:
         try:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
     if victims:
-        logging.getLogger("click").info("closed older Click copies: %s", victims)
+        logging.getLogger("click").info("closed other Click copies: %s", victims)
         _t.sleep(1.5)
         for pid in victims:
             try:
                 os.kill(pid, signal.SIGKILL)
             except OSError:
                 pass
+
+
+def _other_click_pids() -> list[int]:
+    import os
+    import subprocess
+
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=5).stdout
+    except Exception:  # noqa: BLE001
+        return []
+    mine = {os.getpid(), os.getppid()}
+    pids = []
+    for line in out.splitlines():
+        pid_s, _, cmd = line.strip().partition(" ")
+        if not pid_s.isdigit() or int(pid_s) in mine:
+            continue
+        if "Click.app/Contents/MacOS/Click" in cmd and "--selftest" not in cmd:
+            pids.append(int(pid_s))
+    return pids
 
 
 def _sign_copy(app) -> bool:
