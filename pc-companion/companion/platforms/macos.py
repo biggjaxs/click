@@ -7,6 +7,8 @@ the ghost cursor's real clicks and the kill-switch hotkey).
 from __future__ import annotations
 
 import logging
+import os
+import threading
 
 from .base import Element, Platform, Rect, Window
 
@@ -24,7 +26,31 @@ except ImportError as exc:  # pragma: no cover - only on macOS
     raise ImportError("pyobjc is required on macOS: pip install pyobjc") from exc
 
 
+try:
+    from ApplicationServices import AXUIElementGetPid
+except ImportError:  # pragma: no cover
+    AXUIElementGetPid = None
+
+_OWN_PID = os.getpid()
+
+
+def _is_own(element) -> bool:
+    """True if this accessibility element belongs to Click itself."""
+    if AXUIElementGetPid is None or element is None:
+        return False
+    try:
+        err, pid = AXUIElementGetPid(element, None)
+    except Exception:  # noqa: BLE001
+        return False
+    return err == 0 and pid == _OWN_PID
+
+
 def _attr(element, name):
+    # Asking macOS about Click's OWN windows from a background thread makes macOS close Click instantly
+    # (AppKit answers those questions on our main thread). Helpers that run in the background
+    # (the pop-up helper, the screen index...) therefore never look at Click's own windows.
+    if threading.current_thread() is not threading.main_thread() and _is_own(element):
+        return None
     err, value = AXUIElementCopyAttributeValue(element, name, None)
     return value if err == 0 else None
 
@@ -187,8 +213,8 @@ class MacPlatform(Platform):
         have password fields."""
         ws = NSWorkspace.sharedWorkspace()
         front = ws.frontmostApplication()
-        if front is None:
-            return None
+        if front is None or front.processIdentifier() == _OWN_PID:
+            return None  # Click itself is in front: nothing to rescue
         app = AXUIElementCreateApplication(front.processIdentifier())
         win = _attr(app, "AXFocusedWindow")
         if win is None:
