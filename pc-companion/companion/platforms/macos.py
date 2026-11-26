@@ -186,6 +186,55 @@ class MacPlatform(Platform):
                     out.append(Element(name=str(title), role="DockItem", rect=rect, window_title="Dock"))
         return out
 
+    def app_menus(self) -> list[Element]:
+        """The front app's own menus (File, Edit, View...) and the items of a menu that's open right now
+        (from the menu bar, or a right-click menu), so a lesson can point at 'New Folder' inside 'File'."""
+        front = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if front is None or front.processIdentifier() == _OWN_PID:
+            return []
+        app = AXUIElementCreateApplication(front.processIdentifier())
+        out: list[Element] = []
+
+        def menu_items(menu, depth=0):
+            for it in _attr(menu, "AXChildren") or []:
+                name = _attr(it, "AXTitle") or ""
+                rect = _rect_of(it)
+                if name and rect and rect.w > 2 and rect.h > 2:
+                    out.append(Element(name=str(name)[:80], role="MenuItem", rect=rect, window_title="Menu"))
+                for sub in _attr(it, "AXChildren") or []:  # an open submenu
+                    if depth < 2 and (_attr(sub, "AXRole") or "") == "AXMenu" and _rect_of(sub):
+                        menu_items(sub, depth + 1)
+
+        bar = _attr(app, "AXMenuBar")
+        for i, item in enumerate(_attr(bar, "AXChildren") or [] if bar is not None else []):
+            name = _attr(item, "AXTitle") or ""
+            rect = _rect_of(item)
+            if i == 0 or not name or not rect:  # skip the Apple menu
+                continue
+            el = Element(name=str(name)[:80], role="MenuBarItem", rect=rect, window_title="Menu bar")
+            # what's inside this menu (readable even while it's closed): lets a lesson know that
+            # "New Private Window" is under File before anything is opened
+            inside = []
+            for menu in _attr(item, "AXChildren") or []:
+                for it in (_attr(menu, "AXChildren") or [])[:40]:
+                    t = _attr(it, "AXTitle") or ""
+                    if t:
+                        inside.append(str(t)[:50])
+                        for sub in _attr(it, "AXChildren") or []:  # one level of submenus: New > Playlist
+                            for st in (_attr(sub, "AXChildren") or [])[:12]:
+                                u = _attr(st, "AXTitle") or ""
+                                if u:
+                                    inside.append(f"{str(t)[:30]} > {str(u)[:30]}")
+            el.extra["items"] = inside
+            out.append(el)
+            if _attr(item, "AXSelected"):  # this menu is open: its items are on screen
+                for menu in _attr(item, "AXChildren") or []:
+                    menu_items(menu)
+        for child in _attr(app, "AXChildren") or []:  # a right-click menu
+            if (_attr(child, "AXRole") or "") == "AXMenu":
+                menu_items(child)
+        return out
+
     def menu_bar_items(self) -> list[Element]:
         """Menu bar icons (Wi-Fi, battery, sound, Control Center...) and the front app's menus."""
         ws = NSWorkspace.sharedWorkspace()

@@ -69,10 +69,23 @@ BUILT_IN: list[tuple[str, str, list[dict]]] = [
     ]),
 ]
 
-_ASK = re.compile(r"^(?:can you\s+|could you\s+|please\s+)?(?:show\s+me\s+how\s+(?:to|do\s+i|i\s+(?:can|would))\s+|"
-                  r"teach\s+me\s+(?:how\s+(?:to|do\s+i)\s+)?|walk\s+me\s+through\s+(?:how\s+to\s+)?|"
-                  r"show\s+me\s+the\s+steps\s+to\s+)(?P<task>.+?)[?.!]*$|"
-                  r"^how\s+(?:do|can|would|should)\s+i\s+(?P<task2>.+?)[?.!]*$", re.I)
+_LEAD = r"^(?:(?:hey|ok(?:ay)?|so|um+|uh+|yo)[,\s]+)?(?:clicky[,\s]+)?(?:(?:can|could|would|will)\s+you\s+|please\s+|pls\s+)?"
+_ASK = re.compile(
+    _LEAD + r"(?:"
+    r"show\s+me\s+how\s+(?:to|do\s+i|i\s+(?:can|would|should|do))\s+|"
+    r"show\s+me\s+(?:the\s+)?(?:steps|way)\s+(?:to|for)\s+|"
+    r"teach\s+me\s+(?:how\s+(?:to|do\s+i)\s+|to\s+)?|"
+    r"walk\s+me\s+through\s+(?:how\s+to\s+)?|"
+    r"guide\s+me\s+(?:through\s+(?:how\s+to\s+)?|on\s+how\s+to\s+|to\s+)?|"
+    r"help\s+me\s+(?:learn\s+(?:how\s+)?(?:to\s+)?|figure\s+out\s+how\s+to\s+|understand\s+how\s+to\s+)|"
+    r"explain\s+how\s+(?:to|do\s+i|i\s+can)\s+|"
+    r"i\s+(?:don'?t|do\s+not|dont)\s+know\s+how\s+to\s+|"
+    r"i\s+(?:want|wanna|need|would\s+like|'d\s+like)\s+(?:to\s+)?(?:learn|know)\s+(?:how\s+)?(?:to\s+)?|"
+    r"(?:what|where)\s+do\s+i\s+(?:click|press|go|tap|do)\s+to\s+|"
+    r"how\s+to\s+"
+    r")(?P<task>.+?)[?.!]*$|"
+    + _LEAD + r"how\s+(?:do|can|would|should|could|might)\s+(?:i|you|we|one)\s+(?:go\s+about\s+)?(?P<task2>.+?)[?.!]*$",
+    re.I)
 _COMPUTER = re.compile(r"\b(mac|computer|laptop|app|apps|email|e-mail|mail|note|notes|text|message|imessage|wi-?fi|"
                        r"settings?|screenshot|folder|file|files|trash|bookmark|safari|chrome|finder|calendar|wallpaper|"
                        r"download|install|password|printer|print|bluetooth|airdrop|dock|desktop|zoom|facetime|music|"
@@ -84,6 +97,13 @@ _COMPUTER = re.compile(r"\b(mac|computer|laptop|app|apps|email|e-mail|mail|note|
                        re.I)
 
 
+_GERUND = {"making": "make", "creating": "create", "sending": "send", "writing": "write", "taking": "take",
+           "using": "use", "adding": "add", "changing": "change", "setting": "set", "editing": "edit",
+           "connecting": "connect", "opening": "open", "closing": "close", "renaming": "rename",
+           "deleting": "delete", "moving": "move", "installing": "install", "printing": "print",
+           "sharing": "share", "saving": "save", "exporting": "export", "importing": "import"}
+
+
 def find(text: str) -> tuple[str, list[dict]] | None:
     """A lesson for 'show me how to X' / 'how do I X' about the computer, or None."""
     m = _ASK.match(text.strip())
@@ -91,6 +111,11 @@ def find(text: str) -> tuple[str, list[dict]] | None:
         return None
     task = (m.group("task") or m.group("task2") or "").strip()
     explicit = bool(m.group("task"))
+    first, _, rest = task.partition(" ")
+    if first.lower().endswith("ing") and first.lower() in _GERUND:  # "making a folder" -> "make a folder"
+        task = (_GERUND[first.lower()] + " " + rest).strip()
+    if len(task.split()) <= 3 and _COMPUTER.fullmatch(task.lower().removeprefix("the ")):
+        task = f"use {task}"  # "help me learn excel" -> "use excel"
     for pat, title, steps in BUILT_IN:
         if re.search(pat, task, re.I):
             return title, [dict(s) for s in steps]

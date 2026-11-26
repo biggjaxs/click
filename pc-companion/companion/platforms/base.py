@@ -85,6 +85,10 @@ class Platform:
         """App icons in the Dock / taskbar."""
         return []
 
+    def app_menus(self) -> list[Element]:
+        """The front app's own menus (File, Edit, View...) plus the items of any menu that's open right now."""
+        return []
+
     def menu_bar_items(self) -> list[Element]:
         """Items in the system menu bar / tray (Wi-Fi, battery, the app's File/Edit menus...)."""
         return []

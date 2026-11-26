@@ -505,6 +505,12 @@ class GhostController(QObject):
             self.caption = ""
 
     def highlight(self, x: float, y: float, w: float, h: float, label: str):
+        if label == "__clear__":
+            self.highlights = []
+            return
+        if label == "__step__":  # a lesson step: the only box, lit until the next step
+            self.highlights = [{"x": x, "y": y, "w": w, "h": h, "label": "", "until": time.time() + 600}]
+            return
         self.highlights = [hl for hl in self.highlights if hl["until"] > time.time()][-4:]
         self.highlights.append({"x": x, "y": y, "w": w, "h": h, "label": label, "until": time.time() + 8})
 

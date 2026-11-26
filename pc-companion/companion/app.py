@@ -1095,6 +1095,30 @@ class App:
     async def skills_briefing(self, p):
         return await self.skills.briefing(p)
 
+    def screen_snapshot(self, p):
+        """What's on screen right now, for a live lesson (see tutor.py)."""
+        from .tutor import collect
+
+        return collect(self.platform, self.screen, self.settings, p.get("goal", ""), p.get("ocr", True))
+
+    async def skills_tutor(self, p):
+        """A live lesson, one step at a time: begin / step / end (Clicky only points; you click)."""
+        if not hasattr(self, "tutor"):
+            from .tutor import Tutor
+
+            self.tutor = Tutor(self)
+        op = p.get("op")
+        if op == "begin":
+            self.tutor.begin(p.get("title") or "Lesson")
+            return {"ok": True}
+        if op == "end":
+            self.tutor.end(bool(p.get("finished")))
+            return {"ok": True}
+        if op == "thinking":  # while the next step is worked out
+            self.bridge.narrate.emit(p.get("text") or "Looking at your screen…")
+            return {"ok": True}
+        return await self.tutor.show_step(p)
+
     async def skills_guide(self, p):
         try:
             return await self.skills.guide(p)

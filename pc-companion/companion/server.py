@@ -80,6 +80,8 @@ ROUTES = {
     ("screen", "page"): ("screen", "screen_page", False),
     ("skills", "library"): (None, "skills_library", False),
     ("skills", "replay"): ("actions", "skills_replay", False),
+    ("screen", "snapshot"): ("screen", "screen_snapshot", True),
+    ("skills", "tutor"): ("cursor", "skills_tutor", False),
 }
 
 

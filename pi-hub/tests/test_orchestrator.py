@@ -269,7 +269,8 @@ def _wire(services, responses):
 
     async def fake_request(service, action, payload, **kw):
         calls.append((service, action, payload))
-        return responses.get((service, action), {"status": "ok"})
+        r = responses.get((service, action), {"status": "ok"})
+        return r(payload) if callable(r) else r
 
     async def fake_event(*a, **k):
         calls.append(("event",) + a)
@@ -406,15 +407,135 @@ def test_nothing_is_done_before_enter(services):
     assert services.orchestrator._spec is None and not calls
 
 
-def test_show_me_how_runs_a_guided_lesson(services):
-    calls = _wire(services, {("skills", "guide"): {"status": "done", "steps_done": 6, "steps": 6}})
+class FakeMac:
+    """A pretend Mac screen for lessons: each screen is a list of controls; clicking the highlighted control
+    moves to the screen given in `after`. Records everything Clicky is asked to do."""
+
+    def __init__(self, screens, start, after, front="Finder"):
+        self.screens, self.cur, self.after, self.front = screens, start, after, front
+        self.shown = []
+
+    def snapshot(self, p):
+        ctrls = [dict(c, id=f"{self.cur}:{c['name']}", rect=[10, 10, 50, 20], area=c.get("area", "top"))
+                 for c in self.screens[self.cur]]
+        return {"app": self.front, "title": "w", "window": [0, 0, 1200, 800], "controls": ctrls,
+                "source": "accessibility"}
+
+    def tutor(self, p):
+        if p.get("op") != "step":
+            return {"ok": True}
+        self.shown.append(p)
+        if p.get("open_app"):
+            self.front, self.cur = p["open_app"], self.after.get("open:" + p["open_app"], self.cur)
+            return {"result": "app_open"}
+        name = (p.get("element_id") or "").split(":", 1)[-1]
+        nxt = self.after.get(f"{self.cur}:{name}")
+        if nxt:
+            self.cur = nxt
+            return {"result": "clicked"}
+        return {"result": "next"}
+
+
+def _mac(services, mac):
+    return _wire(services, {("screen", "snapshot"): mac.snapshot, ("skills", "tutor"): mac.tutor})
+
+
+def test_show_me_how_follows_the_real_screen_and_never_clicks(services):
+    screens = {"desk": [{"name": "Photos", "role": "DockItem"}],
+               "mail": [{"name": "Get Mail", "role": "Button"}, {"name": "New Message", "role": "Button"}],
+               "compose": [{"name": "To:", "role": "TextField"}, {"name": "Subject:", "role": "TextField"},
+                           {"name": "Send", "role": "Button"}]}
+    mac = FakeMac(screens, "desk", {"open:Mail": "mail", "mail:New Message": "compose"})
+    calls = _mac(services, mac)
+    services.pc_backend = FakeBackend([])
     rec = Recorder()
     out = run(services.orchestrator.handle(send=rec, text="show me how to send an email", conversation_id=None,
                                            upload_ids=[], incognito_key=None, state=_state()))
-    g = next(c for c in calls if c[:2] == ("skills", "guide"))
-    assert g[2]["steps"][0]["app"] == "Mail"
+    assert mac.shown[0]["open_app"] == "Mail"  # Clicky points at Mail; the user opens it
+    pointed = [s.get("element_id") for s in mac.shown[1:] if s.get("element_id")]
+    assert pointed[0] == "mail:New Message" and "compose:To:" in pointed and pointed[-1] == "compose:Send"
+    assert not any(c[:2] in (("cursor", "click"), ("skills", "run"), ("cursor", "type_text")) for c in calls)
+    assert not services.pc_backend.calls  # the recipe matched the real buttons: no AI needed (instant)
     assert "How to send an email" in out["answer"] and "you did it" in out["answer"]
-    assert sum(1 for e in rec.events if e["type"] == "token") == 2  # steps first, then the ending (no repeat)
+    assert any(c[:2] == ("skills", "tutor") and c[2].get("op") == "end" for c in calls if len(c) > 2 and isinstance(c[2], dict))
+
+
+def test_lesson_for_any_app_picks_only_from_what_is_on_screen(services, monkeypatch):
+    import json as _json
+
+    from app import websearch
+
+    async def fake_search(q, max_results=5):
+        return [{"title": "Add a cube", "url": "https://docs.example.org/blender/add-cube", "snippet": "..."}]
+
+    async def fake_fetch(url, max_chars=6000):
+        return {"url": url, "text": "In the 3D Viewport header, open the Add menu, choose Mesh, then Cube."}
+
+    monkeypatch.setattr(websearch, "web_search", fake_search)
+    monkeypatch.setattr(websearch, "fetch_page", fake_fetch)
+    services.db.set_setting("installed_apps", ["Blender", "Safari"])
+    screens = {"desk": [], "viewport": [{"name": "File", "role": "Text"}, {"name": "Add", "role": "Text"},
+                                        {"name": "Object", "role": "Text"}],
+               "addmenu": [{"name": "Mesh", "role": "Text"}, {"name": "Curve", "role": "Text"}],
+               "mesh": [{"name": "Plane", "role": "Text"}, {"name": "Cube", "role": "Text"}], "cube": []}
+    mac = FakeMac(screens, "desk", {"open:Blender": "viewport", "viewport:Add": "addmenu", "addmenu:Mesh": "mesh",
+                                    "mesh:Cube": "cube"})
+    calls = _mac(services, mac)
+    answers = [{"say": "Click Add at the top.", "kind": "click", "target": "Add"},
+               {"say": "Choose Mesh.", "kind": "click", "target": "Mesh"},
+               {"say": "Now click Cube.", "kind": "click", "target": "Cube"},
+               {"say": "Nice, you added a cube!", "kind": "done", "target": "none"}]
+    services.pc_backend = FakeBackend([[{"type": "token", "text": _json.dumps(a)}] for a in answers])
+    out = run(services.orchestrator.handle(send=Recorder(), text="how do I add a cube in blender", conversation_id=None,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    assert mac.shown[0]["open_app"] == "Blender"
+    assert [s.get("element_id") for s in mac.shown[1:]] == ["viewport:Add", "addmenu:Mesh", "mesh:Cube"]
+    first = services.pc_backend.calls[0]
+    assert "- Add  (text, top)" in first["messages"][-1]["content"]  # it chose from the real screen
+    assert first["fmt"]["properties"]["target"]["enum"][:3] == ["File", "Add", "Object"]  # nothing else allowed
+    assert "you did it" in out["answer"] and "Now click Cube." in out["answer"]
+    assert not any(c[:2] in (("cursor", "click"), ("skills", "run")) for c in calls)
+
+
+def test_a_made_up_button_is_never_pointed_at():
+    from app.tutor import describe_screen, parse_choice
+
+    _, idx = describe_screen({"app": "Mail", "controls": [
+        {"id": "e1", "name": "Send", "role": "Button"}, {"id": "e2", "name": "Reply", "role": "Button"},
+        {"id": "e3", "name": "File", "role": "MenuBarItem", "items": ["New Message", "New Private Window"]},
+        {"id": "e4", "name": "Window", "role": "MenuBarItem", "items": ["Minimize"]}]})
+    assert parse_choice('{"say":"Click Send.","kind":"click","target":"Send"}', idx)["control"]["id"] == "e1"
+    bad = parse_choice('{"say":"Click the magic button.","kind":"click","target":"Magic"}', idx)
+    assert "control" not in bad and bad["kind"] == "look"
+    assert parse_choice('{"say":"Look at the left.","kind":"look","target":"left side"}', idx)["area"] == "left side"
+    # the words win when they name a real control (small models mix up the two)
+    assert parse_choice('{"say":"Click Reply at the top.","kind":"click","target":"Send"}', idx)["control"]["id"] == "e2"
+    # something inside a closed menu: point at that menu first (not at "Window" just because the word appears)
+    ch = parse_choice('{"say":"Choose New Private Window in the File menu.","kind":"click","target":"Window"}', idx)
+    assert ch["control"]["id"] == "e3"
+    # what's highlighted and what's said always match
+    ch = parse_choice('{"say":"Click the blue button.","kind":"click","target":"Send"}', idx)
+    assert "Send" in ch["say"]
+
+
+def test_lesson_stop_and_back(services):
+    screens = {"mail": [{"name": "New Message", "role": "Button"}]}
+    mac = FakeMac(screens, "mail", {}, front="Mail")
+    results = iter([{"result": "back"}, {"result": "repeat"}, {"result": "stop"}])
+
+    def tutor(p):
+        if p.get("op") != "step":
+            return {"ok": True}
+        mac.shown.append(p)
+        return next(results)
+
+    _wire(services, {("screen", "snapshot"): mac.snapshot, ("skills", "tutor"): tutor})
+    services.pc_backend = FakeBackend([])
+    out = run(services.orchestrator.handle(send=Recorder(), text="show me how to send an email", conversation_id=None,
+                                           upload_ids=[], incognito_key=None, state=_state()))
+    print([(s.get("element_id"), s.get("say")) for s in mac.shown])
+    assert len(mac.shown) == 3 and all(s.get("element_id") == "mail:New Message" for s in mac.shown)
+    assert "Lesson stopped" in out["answer"]
 
 
 def test_question_during_a_lesson_is_about_that_step(services):
@@ -428,32 +549,6 @@ def test_question_during_a_lesson_is_about_that_step(services):
     assert not any(c[:2] in (("skills", "guide"), ("skills", "run")) for c in calls)  # no new lesson or task
     first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][0]
     assert "step 2" in first["messages"][-1]["content"]
-
-
-def test_app_lessons_are_built_from_a_real_tutorial(services, monkeypatch):
-    import json as _json
-
-    from app import websearch
-
-    async def fake_search(q, max_results=5):
-        return [{"title": "Add a cube", "url": "https://docs.example.org/blender/add-cube", "snippet": "..."}]
-
-    async def fake_fetch(url, max_chars=6000):
-        return {"url": url, "text": "In the 3D Viewport header, open the Add menu, choose Mesh, then Cube."}
-
-    monkeypatch.setattr(websearch, "web_search", fake_search)
-    monkeypatch.setattr(websearch, "fetch_page", fake_fetch)
-    calls = _wire(services, {("skills", "guide"): {"status": "done", "steps_done": 3, "steps": 3}})
-    lesson = {"steps": [{"app": "Blender", "say": "Open Blender."}, {"target": "Add", "say": "Open the Add menu."},
-                        {"target": "Mesh", "say": "Choose Mesh, then Cube."}]}
-    services.pc_backend = FakeBackend([[{"type": "token", "text": _json.dumps(lesson)}]])
-    out = run(services.orchestrator.handle(send=Recorder(), text="how do I add a cube in blender", conversation_id=None,
-                                           upload_ids=[], incognito_key=None, state=_state()))
-    prompt = services.pc_backend.calls[0]["messages"][-1]["content"]
-    assert "open the Add menu, choose Mesh" in prompt  # the lesson was written from the tutorial
-    g = next(c for c in calls if c[:2] == ("skills", "guide"))
-    assert [s.get("target") for s in g[2]["steps"]] == [None, "Add", "Mesh"]
-    assert "How to add a cube in blender" in out["answer"]
 
 
 def test_rescue_explains_a_popup_and_points_at_the_button(services):
@@ -666,3 +761,26 @@ def test_click_learns_how_you_use_your_computer(services):
     _say(services, "any tips for my week")
     ctx = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][-1]["messages"][-1]["content"]
     assert "What I've learned about how they use their computer" in ctx and "Blender" in ctx
+
+
+def test_asking_to_be_taught_never_does_it_for_you(services):
+    phrasings = ["how do I open notes", "teach me how to make a new folder", "can you show me how to send a text",
+                 "i don't know how to take a screenshot", "walk me through making a note",
+                 "what do i click to make a new folder", "help me learn how to use mail",
+                 "hey clicky, how would i connect to wifi", "i want to learn how to bookmark a page"]
+    for text in phrasings:
+        mac = FakeMac({"desk": []}, "desk", {}, front="Finder")
+        results = iter([{"result": "stop"}] * 3)
+
+        def tutor(p, mac=mac, results=results):
+            if p.get("op") != "step":
+                return {"ok": True}
+            mac.shown.append(p)
+            return next(results)
+
+        calls = _wire(services, {("screen", "snapshot"): mac.snapshot, ("skills", "tutor"): tutor})
+        services.pc_backend = FakeBackend([[{"type": "token", "text": '{"say":"Look here.","kind":"look","target":"none"}'}]])
+        run(services.orchestrator.handle(send=Recorder(), text=text, conversation_id=None, upload_ids=[],
+                                         incognito_key=None, state=_state()))
+        did = [c[:2] for c in calls if c[:2] in (("skills", "run"), ("cursor", "click"), ("cursor", "type_text"))]
+        assert mac.shown and not did, (text, did)
