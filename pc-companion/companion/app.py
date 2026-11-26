@@ -41,7 +41,8 @@ class App:
         if "--selftest" not in sys.argv and not os.environ.get("CLICK_CI_REALSTART"):
             _move_to_applications()   # opened from the download / disk image: offer to install properly
             _finish_install()         # stamp this version with this Mac's own signature (keeps permissions)
-            _close_other_copies()     # an older Click still running from somewhere else: close it
+        if "--selftest" not in sys.argv:
+            _close_other_copies()     # any other Click still running (an older version, a leftover): close it
         if _already_running():
             sys.exit(0)  # the running Click was asked to show itself
         _hide_dock_icon()
