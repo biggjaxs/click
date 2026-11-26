@@ -25,14 +25,15 @@ hiddenimports = (
     ["app.main", "click_protocol", "click_protocol.tls"]
     + collect_submodules("app")
     + collect_submodules("companion")
-    + (["AVFoundation", "Foundation", "Quartz"] if sys.platform == "darwin" else [])  # microphone + CGEvent
+    + (["sounddevice", "_sounddevice_data", "Foundation", "Quartz"] if sys.platform == "darwin" else [])
     + collect_submodules("uvicorn")
     + collect_submodules("websockets")
     + collect_submodules("zeroconf")
     + ["sqlcipher3", "sqlcipher3.dbapi2", "multipart", "python_multipart"]
 )
 # Packages that load parts of themselves dynamically or read their own metadata at runtime.
-for pkg in ("ddgs", "pypdf", "docx", "openpyxl", "Vision", "Quartz", "ApplicationServices", "AppKit", "pynput"):
+for pkg in ("ddgs", "pypdf", "docx", "openpyxl", "Vision", "Quartz", "ApplicationServices", "AppKit", "pynput",
+            "sounddevice", "_sounddevice_data"):
     try:
         d, b, h = collect_all(pkg)
         datas += d

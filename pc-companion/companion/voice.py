@@ -1,7 +1,7 @@
 """Talking with Clicky, all on this computer.
 
 - Clicky speaks with the Mac's own offline voice (`say`).
-- You speak: the microphone is recorded to a short file, and whisper.cpp (an offline speech-to-text engine
+- You speak: the microphone is recorded to a short file (sounddevice), and whisper.cpp (an offline speech-to-text engine
   bundled inside Click) turns it into text. Nothing is sent anywhere. The speech model (about 140 MB) is
   downloaded once, the first time you use voice.
 Recording stops by itself when you stop talking (or after 20 seconds).
@@ -128,37 +128,49 @@ class Voice:
         self.recording = False
 
     def _record(self, wav: Path, max_seconds: float, silence: float, on_level) -> None:
-        from AVFoundation import AVAudioRecorder
-        from Foundation import NSURL
+        """Record 16 kHz mono from the microphone until they stop talking (sounddevice / PortAudio, local)."""
+        import queue
+        import wave
 
-        settings = {"AVFormatIDKey": 1819304813,  # linear PCM
-                    "AVSampleRateKey": 16000.0, "AVNumberOfChannelsKey": 1, "AVLinearPCMBitDepthKey": 16,
-                    "AVLinearPCMIsFloatKey": False, "AVLinearPCMIsBigEndianKey": False}
-        rec, err = AVAudioRecorder.alloc().initWithURL_settings_error_(NSURL.fileURLWithPath_(str(wav)), settings, None)
-        if rec is None:
-            raise RuntimeError(f"couldn't use the microphone: {err}")
-        rec.setMeteringEnabled_(True)
-        if not rec.record():
-            raise RuntimeError("the microphone didn't start (is Click allowed to use it? System Settings > Privacy "
-                               "& Security > Microphone)")
-        self.recording, self._recorder = True, rec
+        import numpy as np
+        import sounddevice as sd
+
+        rate, chunks, q = 16000, [], queue.Queue()
+
+        def callback(indata, frames, t, status):
+            q.put(indata.copy())
+
+        self.recording = True
         start = last_voice = time.time()
         heard = False
         try:
-            while self.recording and time.time() - start < max_seconds:
-                time.sleep(0.08)
-                rec.updateMeters()
-                level = rec.averagePowerForChannel_(0)  # dB: about -60 (quiet) .. 0 (loud)
-                on_level(max(0.0, min(1.0, (level + 55) / 45)))
-                if level > -38:
-                    heard, last_voice = True, time.time()
-                elif heard and time.time() - last_voice > silence:
-                    break  # they stopped talking
-                elif not heard and time.time() - start > 7:
-                    break  # nothing said
+            with sd.InputStream(samplerate=rate, channels=1, dtype="int16", blocksize=1600, callback=callback):
+                while self.recording and time.time() - start < max_seconds:
+                    try:
+                        block = q.get(timeout=0.5)
+                    except queue.Empty:
+                        continue
+                    chunks.append(block)
+                    rms = float(np.sqrt(np.mean(block.astype(np.float32) ** 2))) / 32768.0
+                    db = 20 * np.log10(max(rms, 1e-6))  # about -60 (quiet) .. 0 (loud)
+                    on_level(max(0.0, min(1.0, (db + 55) / 45)))
+                    if db > -38:
+                        heard, last_voice = True, time.time()
+                    elif heard and time.time() - last_voice > silence:
+                        break  # they stopped talking
+                    elif not heard and time.time() - start > 7:
+                        break  # nothing said
+        except sd.PortAudioError as exc:
+            raise RuntimeError("couldn't use the microphone (is Click allowed? System Settings > Privacy & Security "
+                               f"> Microphone): {exc}") from exc
         finally:
-            rec.stop()
-            self.recording, self._recorder = False, None
+            self.recording = False
+        audio = np.concatenate(chunks) if chunks else np.zeros((0, 1), dtype="int16")
+        with wave.open(str(wav), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(audio.tobytes())
 
     def transcribe(self, wav: Path) -> str:
         exe = engine_path()

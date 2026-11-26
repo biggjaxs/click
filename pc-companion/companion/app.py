@@ -503,7 +503,8 @@ class App:
             if st["pc"]["connected"]:
                 if sys.platform == "darwin":  # everything voice needs must be inside the app
                     try:
-                        import AVFoundation  # noqa: F401
+                        import sounddevice  # noqa: F401  (the microphone library must load inside the app)
+
                         from .voice import engine_path
 
                         print("SELFTEST VOICE", "OK" if engine_path() else "NO ENGINE", flush=True)
