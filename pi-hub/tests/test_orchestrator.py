@@ -626,3 +626,43 @@ def test_corrections_and_follow_ups_in_a_conversation(services):
     _say(services, "now close it", conv=cid)
     task = next(c for c in calls if c[:2] == ("skills", "run"))
     assert task[2]["plan"] == [{"skill": "quit_app", "app": "Safari"}]
+
+
+def test_summarize_the_video_im_watching(services, monkeypatch):
+    from app import profile
+
+    monkeypatch.setattr(profile, "youtube_transcript", lambda vid, max_chars=9000: "black holes " * 200)
+    calls = _live(services, {}, {("screen", "page"): {"app": "Safari", "title": "How Black Holes Work - YouTube",
+                                                       "url": "https://www.youtube.com/watch?v=abcdefghijk"}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "- Gravity so strong light can't escape.\nBottom line: wow."}]])
+    out = _say(services, "Summarize what I'm watching: How Black Holes Work - YouTube")
+    assert "Bottom line" in out["answer"] and "How Black Holes Work" in out["answer"]
+    prompt = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][-1]["messages"][0]["content"]
+    assert "the video's captions" in prompt
+
+
+def test_short_form_is_not_summarized(services):
+    _live(services, {}, {("screen", "page"): {"app": "Safari", "title": "lol #shorts - YouTube",
+                                              "url": "https://www.youtube.com/shorts/abcdefghijk"}})
+    assert "short-form" in _say(services, "summarize this")["answer"]
+
+
+def test_click_learns_how_you_use_your_computer(services):
+    import datetime as _dt
+    import time as _time
+
+    db = services.db
+    now = _time.time()
+    for app, title, secs in (("Pages", "Essay draft", 7200), ("Blender", "robot.blend", 5400),
+                             ("Safari", "Lofi beats - YouTube", 3600), ("Safari", "Docs - MDN", 1800)):
+        t = _dt.datetime.fromtimestamp(now)
+        db.execute("INSERT INTO activity(day, hour, app, title, seconds, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                   (t.strftime("%Y-%m-%d"), 15, app, title, secs, now))
+    _live(services, {})
+    out = _say(services, "what have you learned about me?")["answer"]
+    assert "Pages" in out and "Blender" in out and "“Essay draft” in Pages" in out and "YouTube" in out
+    services.orchestrator._learned = None
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "ok"}]])
+    _say(services, "any tips for my week")
+    ctx = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][-1]["messages"][-1]["content"]
+    assert "What I've learned about how they use their computer" in ctx and "Blender" in ctx

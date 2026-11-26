@@ -163,6 +163,12 @@ class App:
         self.library = Library(self.settings.dir)
         if not self.selftest and sys.platform == "darwin":
             self.screen.start_index()  # keep an up-to-date list of the Dock and menu bar items
+        from .brain import Brain
+
+        self.brain = Brain(self)
+        self.bridge.companionOffer.connect(self._companion_offer)
+        if not self.selftest:
+            self.brain.start()
         from .screenmem import ScreenMemory
 
         self.screen_memory = ScreenMemory(self)
@@ -630,6 +636,10 @@ class App:
             self.ask.set_listening(False, "I didn't catch that. Press the mic and try again.")
             return
         self.ask.set_listening(False, f"You said: “{text}”")
+        reply = self.brain.answer_pending(text) if getattr(self, "brain", None) else None
+        if reply:
+            self.ask.set_status(reply)
+            return
         if self.lesson.get("active"):
             cmd = lesson_command(text)
             if cmd:  # "next", "repeat", "go back", "stop"
@@ -643,6 +653,10 @@ class App:
     def _typed_lesson_command(self, text: str) -> bool:
         from .voice import lesson_command
 
+        reply = self.brain.answer_pending(text) if getattr(self, "brain", None) else None
+        if reply:  # "no thanks" / "stop suggesting that" right after an offer
+            self.ask.set_status(reply)
+            return True
         if not self.lesson.get("active"):
             return False
         cmd = lesson_command(text)
@@ -653,6 +667,21 @@ class App:
                                      "stop": "Stopping the lesson"}[cmd])
             return True
         return False
+
+    def _companion_offer(self, offer: dict) -> None:
+        """The companion brain thinks it can help: Clicky appears beside the window with a one-tap offer."""
+        r = offer.get("rect")
+        if r:
+            x, y = self.ghost.clear_spot(r[0] + min(r[2] / 2, 260), r[1] + 30)
+        else:
+            x, y = self.ghost.primary_center()
+        self.bridge.ghostMove.emit(float(x), float(y), offer["say"])
+        if self.ask:
+            self.ask.offer(offer["label"], offer["question"], on_click=lambda o=offer: self.brain.accepted(o),
+                           send=not offer.get("info"))
+            self.ask.set_status(offer["say"])
+        if offer["kind"] in ("battery", "meeting", "break"):
+            self.notify(offer["say"])
 
     def _offer_rescue(self, d: dict) -> None:
         """A troubling pop-up is on screen: Clicky appears beside it and offers to explain it."""
@@ -955,6 +984,30 @@ class App:
                 self.notify(f"Imported {n} skill{'s' if n != 1 else ''}. Say “show me how to …” or “do …” to use them.")
             except Exception as exc:  # noqa: BLE001
                 self.notify(f"Couldn't import that file: {exc}")
+
+    async def screen_page(self, p):
+        """The page in the browser in front: its title and address (to summarize it)."""
+        import subprocess as _sp
+
+        w = await asyncio.to_thread(self.platform.active_window)
+        out = {"app": w.app if w else "", "title": w.title if w else ""}
+        from .brain import BROWSERS
+        from .safety import is_blocked
+
+        if not w or is_blocked(w.title, w.app, self.settings["blocklist"]):
+            return {"app": "", "title": "", "url": ""}
+        if sys.platform == "darwin" and w.app in BROWSERS and w.app != "Firefox":
+            if w.app == "Safari":
+                script = 'tell application "Safari" to return URL of front document'
+            else:
+                script = f'tell application "{w.app}" to return URL of active tab of front window'
+            try:
+                r = await asyncio.to_thread(_sp.run, ["osascript", "-e", script], capture_output=True, text=True,
+                                            timeout=8)
+                out["url"] = r.stdout.strip() if r.returncode == 0 else ""
+            except Exception:  # noqa: BLE001
+                out["url"] = ""
+        return out
 
     async def system_state(self, p):
         """What's going on right now (so "stop it", "cancel that", "how long is left" make sense)."""

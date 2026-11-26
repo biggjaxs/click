@@ -77,6 +77,7 @@ ROUTES = {
     ("skills", "briefing"): ("files", "skills_briefing", False),
     ("skills", "record"): ("actions", "skills_record", False),
     ("system", "state"): (None, "system_state", False),
+    ("screen", "page"): ("screen", "screen_page", False),
     ("skills", "library"): (None, "skills_library", False),
     ("skills", "replay"): ("actions", "skills_replay", False),
 }

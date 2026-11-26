@@ -17,8 +17,8 @@ from PySide6.QtWidgets import (
 
 TILE_W, TILE_H, MARGIN = 500, 700, 0
 GLOW = 52      # room around the flat chat panel for the flowing goo (and its droplets)
-GOO_OFF = 17   # how far the goo reaches past the panel at rest
-GOO_AMP = 13   # how much it ripples
+GOO_OFF = 14   # how far the goo reaches past the panel at rest
+GOO_AMP = 8    # how much it ripples (calm)
 PANEL_R = 30   # the flat panel's corner radius
 
 
@@ -141,6 +141,10 @@ class Header(QWidget):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
+            wh = self.tile.windowHandle()
+            if wh is not None and wh.startSystemMove():  # let macOS move the window: perfectly smooth
+                self._drag = None
+                return
             self._drag = e.globalPosition().toPoint() - self.tile.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, e):
@@ -405,7 +409,7 @@ class Tile(QWidget):
         self._glow_t = 0.0
         self._glow = QTimer(self)
         self._glow.timeout.connect(self._tick_glow)
-        self._glow.start(80)  # slow, gentle motion; light on the processor
+        self._glow.start(50)  # small, slow steps = smooth, calm motion
         outer = QVBoxLayout(self)
         outer.setContentsMargins(GLOW, GLOW, GLOW, GLOW)
         outer.addWidget(self.frame)
@@ -452,10 +456,19 @@ class Tile(QWidget):
         self.resize(TILE_W, TILE_H)
         self.place_top_right()
 
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        # tell the orb where the chat went, once the window stops moving
+        if not hasattr(self, "_moved_timer"):
+            self._moved_timer = QTimer(self)
+            self._moved_timer.setSingleShot(True)
+            self._moved_timer.timeout.connect(self.moved.emit)
+        self._moved_timer.start(150)
+
     # ---- liquid glass look ------------------------------------------------------------------------------
     def _tick_glow(self):
         if self.isVisible() and not reduce_motion():
-            self._glow_t += 0.08
+            self._glow_t += 0.035
             self.update()
 
     def paintEvent(self, _):

@@ -27,6 +27,7 @@
     <div class="section-label">Recent</div>
     <nav id="conv-list" class="conv-list" aria-label="Conversations"></nav>
     <div class="side-nav">
+      <button class="nav-btn" data-panel="try"><span data-icon="sparkle"></span>Things to try</button>
       <button class="nav-btn" data-panel="gallery"><span data-icon="image"></span>Gallery</button>
       <button class="nav-btn" data-panel="memory"><span data-icon="memory"></span>Memory</button>
       <button class="nav-btn" data-panel="permissions"><span data-icon="shield"></span>Permissions</button>
@@ -43,6 +44,7 @@
       <span class="status-pill hidden" id="pill-watch"><span class="dot rec"></span>Watching</span>
       <span class="status-pill hidden" id="pill-paused"><span class="dot warn"></span>Paused</span>
       <span class="status-pill" id="pill-pc"><span class="dot"></span><span>Connecting</span></span>
+      <button class="icon-btn" id="try-btn" aria-label="Things to try" title="Things to try" data-icon="sparkle"></button>
       <button class="icon-btn tile-only" id="tile-new" aria-label="New chat" title="New chat" data-icon="plus"></button>
     </header>
 
@@ -50,13 +52,14 @@
       <div class="empty" id="empty-state">
         <div class="logo big" data-logo></div>
         <h1>How can I help?</h1>
-        <p>Ask anything. I can see your screen, point things out with my own cursor, make images, read your files and remember what you tell me.</p>
+        <p>Ask anything, or just tell me what to do. I watch out for you, point things out with my own cursor and learn how you work.</p>
         <div class="suggestions">
-          <button class="suggestion" data-text="What's on my screen?"><span data-icon="monitor"></span>What's on my screen?</button>
-          <button class="suggestion" data-text="Show me where the Wi-Fi settings are"><span data-icon="pointer"></span>Show me where the Wi-Fi settings are</button>
-          <button class="suggestion" data-text="Draw a sunset over a lake"><span data-icon="image"></span>Draw a sunset over a lake</button>
-          <button class="suggestion" data-text="Remember that I like short answers"><span data-icon="memory"></span>Remember that I like short answers</button>
+          <button class="suggestion" data-text="Good morning"><span data-icon="clock"></span>Good morning briefing</button>
+          <button class="suggestion" data-text="Show me how to send an email"><span data-icon="pointer"></span>Show me how to send an email</button>
+          <button class="suggestion" data-text="Help me focus for 25 minutes"><span data-icon="check"></span>Focus for 25 minutes</button>
+          <button class="suggestion" data-text="What have you learned about me?"><span data-icon="memory"></span>What have you learned about me?</button>
         </div>
+        <button class="link-btn" id="see-all">See everything I can do</button>
       </div>
     </section>
 

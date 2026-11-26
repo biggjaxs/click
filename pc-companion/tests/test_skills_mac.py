@@ -305,3 +305,58 @@ def test_focus_reminds_every_time_you_go_back(monkeypatch):
     assert f.observe(pod, 3, t + 70) is None            # podcasts are fine
     assert fmod.distracting("Discord", "") and fmod.distracting("Safari", "Instagram")
     assert not fmod.distracting("Podcasts", "Episode 4") and not fmod.distracting("Books", "Dune")
+
+
+def test_companion_judges_what_deserves_a_summary():
+    from companion.brain import judge_content
+
+    assert judge_content("Safari", "How Black Holes Actually Work - YouTube") == "video"
+    assert judge_content("Google Chrome", "The surprising history of coffee | BBC News") == "article"
+    assert judge_content("Safari", "funny cat #shorts - YouTube") is None      # short-form
+    assert judge_content("Safari", "Instagram") is None and judge_content("Messages", "Mom") is None
+    assert judge_content("Safari", "pizza near me - Google Search") is None
+    assert judge_content("Pages", "Essay draft") is None                        # your own documents
+
+
+def test_companion_brain_offers_politely_and_learns(monkeypatch):
+    import types as _t
+
+    from companion import brain as bmod
+    from companion.platforms import Rect, Window
+
+    monkeypatch.setattr(bmod, "idle_seconds", lambda: 3.0)
+    monkeypatch.setattr(bmod, "battery", lambda: (80, True))
+    monkeypatch.setattr(bmod, "free_disk_gb", lambda: 200.0)
+    offers, events, settings = [], [], {"blocklist": [], "suggest_stats": {}}
+
+    class S(dict):
+        def get(self, k, d=None):
+            return dict.get(self, k, d)
+
+        def set(self, k, v):
+            self[k] = v
+
+        def __getitem__(self, k):
+            return dict.__getitem__(self, k)
+
+    st = S(settings)
+    video = Window(1, "How Black Holes Actually Work - YouTube", "Safari", Rect(0, 0, 900, 700))
+    app = _t.SimpleNamespace(paused=False, settings=st, platform=_t.SimpleNamespace(active_window=lambda: video),
+                             bridge=_t.SimpleNamespace(companionOffer=_t.SimpleNamespace(emit=offers.append)),
+                             server=_t.SimpleNamespace(send_event_threadsafe=lambda *a: events.append(a)), focus=None)
+    monkeypatch.setattr(bmod.sys, "platform", "linux")  # no calendar lookups in the test
+    b = bmod.Brain(app)
+    t0 = 1_800_000_000.0
+    b.day_seen = __import__("time").strftime("%Y-%m-%d", __import__("time").localtime(t0))  # morning briefing done
+    assert b.step(t0) is None                        # just started watching
+    offer = b.step(t0 + 95)                          # ...a minute and a half in: offer a summary
+    assert offer and offer["kind"] == "summary" and "video" in offer["label"].lower()
+    assert b.step(t0 + 100) is None                  # never twice for the same video, and 8 minutes apart
+    assert any(e[1] == "activity" for e in events)   # learning: minute notes sent to memory
+    # "no thanks" three times -> that kind of offer stops
+    for _ in range(3):
+        b.pending = {"kind": "summary", "at": t0 + 101}
+        assert b.answer_pending("no thanks") == "No problem."
+    assert b.muted("summary")
+    b.pending = {"kind": "break", "at": t0 + 102}
+    assert "won't suggest" in b.answer_pending("stop suggesting that") and b.muted("break")

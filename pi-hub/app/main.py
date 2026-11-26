@@ -250,6 +250,25 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(store())
 
     s.link.event_handlers["system.seen"] = on_seen
+
+    def on_activity(payload):
+        """The companion brain's minute-by-minute note: which app/window and for how long (learned over time)."""
+        import datetime as _dt
+
+        at = float(payload.get("at") or time.time())
+        t = _dt.datetime.fromtimestamp(at)
+        for it in (payload.get("items") or [])[:8]:
+            s.db.execute("INSERT INTO activity(day, hour, app, title, seconds, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                         (t.strftime("%Y-%m-%d"), t.hour, str(it.get("app", ""))[:80], str(it.get("title", ""))[:160],
+                          float(it.get("seconds") or 0), at))
+        if t.minute == 0:  # keep 60 days
+            s.db.execute("DELETE FROM activity WHERE created_at < ?", (at - 60 * 86400,))
+
+    def on_inventory(payload):
+        s.db.set_setting("installed_apps", [str(a)[:60] for a in (payload.get("apps") or [])][:400])
+
+    s.link.event_handlers["system.activity"] = on_activity
+    s.link.event_handlers["system.inventory"] = on_inventory
     s.pairing.on_paired = s.link.reconnect_now
     s.audit.listeners.append(lambda e: asyncio.get_event_loop().create_task(s._broadcast({"type": "activity", "entry": e})))
     s.link.start()

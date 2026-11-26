@@ -14,3 +14,4 @@ python-docx>=1.1        # MIT
 openpyxl>=3.1           # MIT
 Pillow>=10.0            # HPND (shrinks pictures before sending them to the model)
 sqlcipher3>=0.5         # zlib (encrypted SQLite; built against libsqlcipher by the installer)
+youtube-transcript-api>=0.6  # MIT (summaries of videos you're watching: reads the captions)

@@ -118,6 +118,19 @@ SCHEMA = [
         created_at REAL NOT NULL
     );
     """,
+    # v3: how the user uses their computer (app + window title + time), so Click learns them over time
+    """
+    CREATE TABLE IF NOT EXISTS activity (
+        id INTEGER PRIMARY KEY,
+        day TEXT NOT NULL,
+        hour INTEGER NOT NULL,
+        app TEXT NOT NULL DEFAULT '',
+        title TEXT NOT NULL DEFAULT '',
+        seconds REAL NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS activity_day ON activity(day);
+    """,
 ]
 
 

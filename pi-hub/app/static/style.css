@@ -337,3 +337,14 @@ body.tile .suggestion:hover { border-color: color-mix(in srgb, var(--accent) 60%
 .typing-preview .tp-label { display: block; font-size: 11.5px; color: var(--accent, #6d5dfc); margin-bottom: 3px; }
 .typing-preview .tp-text { color: var(--muted, #8a8a94); font-style: italic; white-space: pre-wrap; max-height: 9em; overflow: hidden; }
 .typing-preview.hidden { display: none; }
+
+/* Things to try */
+.try-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.try-card { border: 1px solid var(--border, rgba(127,127,127,.25)); border-radius: 14px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 6px; background: color-mix(in srgb, var(--accent, #6d5dfc) 4%, transparent); }
+.try-head { display: flex; align-items: center; gap: 8px; }
+.try-head svg { width: 16px; height: 16px; color: var(--accent, #6d5dfc); }
+.try-card .help { margin: 0; }
+.try-card .btn.small { align-self: flex-start; padding: 4px 12px; font-size: 12.5px; margin-top: auto; }
+.link-btn { background: none; border: none; color: var(--accent, #6d5dfc); cursor: pointer; font-size: 13.5px; margin-top: 14px; }
+.link-btn:hover { text-decoration: underline; }

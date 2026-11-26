@@ -69,7 +69,7 @@ class QuickAsk(QWidget):
         self._goo_t = 0.0
         self._goo = QTimer(self)
         self._goo.timeout.connect(self._tick_goo)
-        self._goo.start(80)  # slow and gentle
+        self._goo.start(50)  # small, slow steps = smooth
         self.accent = accent
         self.conversation_id = None
         self.answer = ""
@@ -173,7 +173,7 @@ class QuickAsk(QWidget):
 
         if self.isVisible():
             if not reduce_motion():
-                self._goo_t += 0.08
+                self._goo_t += 0.035
             else:
                 self._goo_t += 0.02  # still animate the "thinking" dots slowly
             self.update()
@@ -187,7 +187,7 @@ class QuickAsk(QWidget):
         from .tile import paint_goo
 
         p = QPainter(self)
-        paint_goo(p, QRectF(self.rect()), GOO_M, 20, self._goo_t, self.accent, off=10, amp=9)
+        paint_goo(p, QRectF(self.rect()), GOO_M, 20, self._goo_t, self.accent, off=9, amp=6)
         p.end()
 
     # ---- showing / hiding ------------------------------------------------------------------------------------
@@ -229,7 +229,7 @@ class QuickAsk(QWidget):
         self.adjustSize()
         self.input.setFocus()
 
-    def offer(self, label: str, question: str):
+    def offer(self, label: str, question: str, on_click=None, send: bool = True):
         """A one-tap offer at the front of the suggestions (e.g. "Help with this pop-up")."""
         old = getattr(self, "_offer_btn", None)
         if old is not None:
@@ -244,12 +244,15 @@ class QuickAsk(QWidget):
         def go():
             b.deleteLater()
             self._offer_btn = None
+            if on_click:
+                on_click()
             lay = self.chips.layout()
             for i in range(lay.count()):
                 w = lay.itemAt(i).widget()
                 if w is not None and w is not b:
                     w.show()
-            self.send_text(question)
+            if send:
+                self.send_text(question)
 
         b.clicked.connect(go)
         lay = self.chips.layout()

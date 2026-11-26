@@ -106,6 +106,7 @@ class Bridge(QObject):
     voiceLevel = Signal(float)          # how loud you're talking (0..1), for the mic button
     voiceStatus = Signal(str)           # e.g. "Downloading Clicky's voice... 40%"
     rescueOffer = Signal(dict)          # a troubling pop-up appeared: offer help
+    companionOffer = Signal(dict)       # the companion brain thinks it can help right now
 
 
 GLASS = QColor(22, 22, 26, 235)   # dark translucent card used for captions and status
@@ -922,6 +923,11 @@ class Tray(QObject):
         self.rescue_action.setChecked(bool(app_ctl.settings.get("rescue_mode", True)))
         self.rescue_action.toggled.connect(lambda on: app_ctl.settings.set("rescue_mode", bool(on)))
         menu.addAction(self.rescue_action)
+        self.suggest_action = QAction("Helpful suggestions (Clicky offers help on its own)")
+        self.suggest_action.setCheckable(True)
+        self.suggest_action.setChecked(app_ctl.settings.get("suggestions", "normal") != "off")
+        self.suggest_action.toggled.connect(lambda on: app_ctl.settings.set("suggestions", "normal" if on else "off"))
+        menu.addAction(self.suggest_action)
         self.memory_action = QAction("Remember what I see (private, on this computer)")
         self.memory_action.setCheckable(True)
         self.memory_action.setChecked(bool(app_ctl.settings.get("screen_memory", False)))

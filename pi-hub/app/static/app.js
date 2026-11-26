@@ -451,11 +451,11 @@ function openPanel(name) {
   panelOpen = name;
   closeSidebar();
   $("#panel").classList.remove("hidden");
-  const titles = { gallery: "Gallery", memory: "Memory", permissions: "Permissions", activity: "Activity log", settings: "Settings" };
+  const titles = { try: "Things to try", gallery: "Gallery", memory: "Memory", permissions: "Permissions", activity: "Activity log", settings: "Settings" };
   $("#panel-title").textContent = titles[name] || name;
   const content = $("#panel-content");
   content.replaceChildren(el("div", { class: "notice", text: "Loading" }));
-  ({ gallery: renderGallery, memory: renderMemory, permissions: renderPermissions, activity: renderActivity, settings: renderSettings }[name])(content)
+  ({ try: renderTry, gallery: renderGallery, memory: renderMemory, permissions: renderPermissions, activity: renderActivity, settings: renderSettings }[name])(content)
     .catch(e => content.replaceChildren(el("div", { class: "notice" }, icon("alert"), e.message)));
 }
 function closePanel() { $("#panel").classList.add("hidden"); panelOpen = null; }
@@ -466,6 +466,49 @@ const switchRow = (label, checked, onchange) => {
   input.onchange = () => onchange(input.checked, input);
   return el("label", { class: "switch-row" }, input, el("span", { class: "switch" }), el("span", { text: label }));
 };
+
+// ---------- Things to try ----------
+const TRY = [
+  ["New", "sparkle", [
+    ["Talk to Clicky", "Press Control + Space (or the mic in the Ask box) and just talk. Clicky talks back.", null],
+    ["Summaries", "Watching a long video or reading an article? Ask for the gist.", "Summarize what I'm watching"],
+    ["Guided lessons you can talk to", "Clicky points at each step and reads it out. Say next, repeat, or ask a question.", "Show me how to send an email"],
+    ["What Clicky has learned", "Clicky learns which apps and projects you use (privately) to help you better.", "What have you learned about me?"],
+  ]],
+  ["Every day", "clock", [
+    ["Morning briefing", "Your reminders, calendar, unread mail and the weather.", "Good morning"],
+    ["Focus time", "A timer that nudges you if you drift to YouTube or social media.", "Help me focus for 25 minutes"],
+    ["Reminders", "Set them in plain English.", "Remind me to drink water in 30 minutes"],
+    ["Music", "Play, pause, skip.", "Play some music"],
+  ]],
+  ["Do it for me", "pointer", [
+    ["Open anything", "Apps, files, folders, websites, even with typos.", "Open my downloads"],
+    ["Notes", "Make notes with titles, or add to one you have.", "Make a note titled ideas"],
+    ["Write for you", "Clicky writes it and puts it in Notes.", "Open Notes and write a short poem about the ocean"],
+    ["Messages and email", "Texts always ask first; emails open as drafts for you to send.", "Text mom saying I'm on my way"],
+    ["Settings", "Volume, dark mode, Wi-Fi, any Settings page.", "Turn on dark mode"],
+    ["Fill in forms", "From your Contacts card. Never passwords or cards, never presses Submit.", "Fill out this form"],
+  ]],
+  ["Teach and learn", "memory", [
+    ["Show me where", "Clicky glides to any button, icon or menu.", "Where is the Wi-Fi?"],
+    ["Big apps", "Lessons for Blender, Excel, Photoshop... built from real tutorials.", "How do I add a cube in Blender?"],
+    ["Teach Clicky once", "Do something while Clicky watches; it saves it as a skill.", "Watch me do it, call it my routine"],
+    ["Your skills", "Everything Clicky knows how to do.", "What skills do you know?"],
+  ]],
+  ["Watching out for you", "shield", [
+    ["Error pop-ups", "Clicky offers to explain them and points at the right button.", null],
+    ["Breaks and battery", "Gentle reminders after long sessions or when the battery is low.", null],
+    ["Find what you saw", "Turn on Remember what I see in the menu bar, then ask.", "What was that website I looked at yesterday?"],
+  ]],
+];
+async function renderTry(content) {
+  const cards = TRY.map(([title, ic, items]) => section(title, null, el("div", { class: "try-grid" }, ...items.map(([name, desc, ask]) =>
+    el("div", { class: "try-card" },
+      el("div", { class: "try-head" }, icon(ic), el("b", { text: name })),
+      el("p", { class: "help", text: desc }),
+      ask ? el("button", { class: "btn small", text: "Try it", onclick: () => { closePanel(); submit(ask); } }) : null)))));
+  content.replaceChildren(...cards);
+}
 
 async function renderGallery(content) {
   const images = await api("/api/images");
@@ -668,6 +711,8 @@ function closeSidebar() { $("#sidebar").classList.remove("open"); }
 
 // ---------- Wire up ----------
 $("#composer").addEventListener("submit", e => { e.preventDefault(); submit($("#input").value); });
+$("#try-btn")?.addEventListener("click", () => openPanel("try"));
+$("#see-all")?.addEventListener("click", () => openPanel("try"));
 $("#input").addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit($("#input").value); }
 });
