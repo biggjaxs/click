@@ -246,6 +246,7 @@ async def lifespan(app: FastAPI):
         if s.link.connected:
             asyncio.create_task(s.push_settings_to_pc())
             asyncio.create_task(s.images.process_queue())
+            asyncio.create_task(s.orchestrator.warm_instructions())  # so even the first question is quick
 
     def on_kill(payload):
         s.permissions.set_paused(True)

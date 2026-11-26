@@ -28,7 +28,7 @@ def test_fallback_when_pc_offline(services):
     services.pi_backend = FakeBackend([[{"type": "token", "text": "Hello from the Pi"}]])
     services.pi_backend.source = "pi"
     rec = Recorder()
-    out = run(services.orchestrator.handle(send=rec, text="hi", conversation_id=None, upload_ids=[],
+    out = run(services.orchestrator.handle(send=rec, text="tell me a fun fact", conversation_id=None, upload_ids=[],
                                            incognito_key=None, state=_state()))
     assert out["source"] == "pi" and out["answer"] == "Hello from the Pi"
     assert any(e["type"] == "notice" and "backup model" in e["text"] for e in rec.events)
@@ -218,7 +218,7 @@ def test_system_prompt_is_stable_between_turns(services):
     services.link.connected = True
     services.pc_backend = FakeBackend([[{"type": "token", "text": "a"}], [{"type": "token", "text": "b"}]])
     services.link.request = None
-    run(services.orchestrator.handle(send=Recorder(), text="hi", conversation_id=None, upload_ids=[],
+    run(services.orchestrator.handle(send=Recorder(), text="tell me a fun fact", conversation_id=None, upload_ids=[],
                                      incognito_key=None, state=_state()))
     run(services.memory.add_fact("User's name is Jaxon", "identity", 1.0))
     run(services.orchestrator.handle(send=Recorder(), text="hello again", conversation_id=1, upload_ids=[],
@@ -872,3 +872,25 @@ def test_lesson_in_an_unfamiliar_app_is_planned_from_its_real_menus(services):
     assert len(services.pc_backend.calls) == 1  # planned once; every step after that was instant
     assert "you did it" in out["answer"]
     assert not any(c[:2] in (("cursor", "click"), ("skills", "run")) for c in calls)
+
+
+def test_small_talk_is_instant_and_quick_questions_use_the_fast_model(services):
+    from app.orchestrator import model_role, small_talk
+
+    for t in ("hi", "hello there", "how are you?", "thanks!", "ok", "yo", "bye", "hey!!"):
+        assert small_talk(t), t
+    for t in ("hey clicky", "good morning"):  # bring Clicky out / the morning briefing
+        assert small_talk(t) is None, t
+    for t in ():
+        assert small_talk(t), t
+    for t in ("hi can you open safari", "how are you able to see my screen", "thanks to the rain it's cold"):
+        assert small_talk(t) is None, t
+    _wire(services, {})
+    services.pc_backend = FakeBackend([])
+    out = run(services.orchestrator.handle(send=Recorder(), text="hi", conversation_id=None, upload_ids=[],
+                                           incognito_key=None, state=_state()))
+    assert out["answer"] and not services.pc_backend.calls  # no AI model involved at all
+    assert model_role("what time is it in tokyo") == "chat"
+    assert model_role("whats the capital of spain") == "chat"
+    assert model_role("explain how a vpn works") == "smart"
+    assert model_role("why does my mac get so hot when i have a lot of chrome tabs open") == "smart"

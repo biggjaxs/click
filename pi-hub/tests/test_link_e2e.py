@@ -135,7 +135,7 @@ def test_pair_connect_chat_image_and_reject_strangers(services, tmp_path):
 
         from app.orchestrator import TurnState
 
-        out = await services.orchestrator.handle(send=send, text="hello?", conversation_id=None, upload_ids=[],
+        out = await services.orchestrator.handle(send=send, text="tell me something nice?", conversation_id=None, upload_ids=[],
                                                  incognito_key=None, state=TurnState())
         assert out["answer"] == "Hello from PC" and out["source"] == "pc" and out["model"] == "big-pc-model"
         assert [e["text"] for e in events if e["type"] == "token"] == ["Hel", "lo ", "from PC"]

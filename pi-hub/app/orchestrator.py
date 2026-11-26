@@ -131,6 +131,50 @@ def brief_note(text: str) -> tuple[str, int]:
     return BRIEF_NOTE, 130
 
 
+def model_role(text: str) -> str:
+    """Which model answers: the smart (bigger, slower) one only when it's worth the wait - explanations and
+    long or complicated messages. Quick everyday questions use the fast model."""
+    t = (text or "").strip()
+    if _DETAIL_RE.search(t) or len(t.split()) >= 12:
+        return "smart"
+    return "chat"
+
+
+_SMALL_TALK = [
+    (r"(?:hi|hey|hello|hiya|howdy|yo|sup|what'?s up|wassup|heyy+|hii+)(?:\s+(?:there|buddy|man|dude|bro))?",
+     ["Hi! What can I do for you?", "Hey! What do you need?", "Hello! Ask me anything, or tell me what to do."]),
+    (r"(?:how are you|how'?s it going|how are u|how r u|hru|how you doing|how'?re you)(?: doing)?(?: today)?",
+     ["I'm good, thanks! What can I help with?", "Doing great. What are we working on?"]),
+    (r"(?:thanks|thank you|thx|ty|thank u|thanks a lot|thanks so much|appreciate it|cheers)",
+     ["You're welcome!", "Anytime!", "Happy to help!"]),
+    (r"(?:ok|okay|k|kk|cool|nice|great|awesome|perfect|got it|sounds good|alright|sweet|neat|lol|haha+)",
+     ["Great!", "Cool.", "Got it."]),
+    (r"(?:bye|goodbye|see ya|see you|later|good night|gn|cya)",
+     ["Bye! I'm here whenever you need me.", "See you later!"]),
+    (r"(?:who are you|what are you|what'?s your name|who made you)",
+     ["I'm Click, your assistant on this Mac. Clicky is my cursor: I can show you where things are, teach you "
+      "apps step by step, and do things for you."]),
+    (r"(?:what can you do|what do you do|help|what are your features)",
+     ["I can answer questions, open apps, play music, write notes, set reminders and timers, summarize what you're "
+      "reading, and teach you any app step by step while Clicky points at the buttons. Try "
+      "“teach me how to make a folder”."]),
+]
+
+
+def small_talk(text: str) -> str | None:
+    """Greetings, thanks, "ok": answered instantly (no AI needed for these). "Good morning" is left for the
+    morning briefing and "hey Clicky" for bringing Clicky out."""
+    import random
+
+    t = re.sub(r"[\s!.?,~]+$", "", (text or "").strip().lower())
+    if not t or len(t) > 40 or "click" in t:
+        return None
+    for pat, replies in _SMALL_TALK:
+        if re.fullmatch(pat, t):
+            return random.choice(replies)
+    return None
+
+
 class TurnState:
     def __init__(self):
         self.cancel = asyncio.Event()
@@ -377,6 +421,8 @@ class Orchestrator:
                     quick = Reply(f"I didn't save that: {res['reason']}")
             else:
                 quick = Reply("Memory saving is paused, so I didn't save that. You can turn it on in Settings.")
+        elif small_talk(text):  # "hi", "thanks", "ok": instant, no AI needed
+            quick = Reply(small_talk(text))
         elif m_forget:
             removed = await deps.memory.forget(m_forget.group(1).strip().rstrip("."))
             await send({"type": "memory_forgotten", "facts": removed})
@@ -998,7 +1044,7 @@ class Orchestrator:
         t = text.strip()
         if not deps.link.connected or len(t) < 2 or len(t) > 300 or len(t.split()) < 2 and not t.endswith("?"):
             return False
-        if (quickmath.solve(t) or REMEMBER_RE.match(t) or FORGET_RE.match(t) or mentions_clicky(t) or BRIEFING_RE.match(t)
+        if (quickmath.solve(t) or small_talk(t) or REMEMBER_RE.match(t) or FORGET_RE.match(t) or mentions_clicky(t) or BRIEFING_RE.match(t)
                 or RECALL_RE.search(t) or RECORD_RE.match(t) or SKILLS_LIST_RE.match(t) or EXPORT_RE.match(t)
                 or SUMMARIZE_RE.match(t) or LEARNED_RE.search(t)
                 or guides.find(t) or t.startswith("(I'm in the lesson") or t.startswith("Help me with this pop-up")
@@ -1056,7 +1102,7 @@ class Orchestrator:
         out: list[str] = []
         last_sent = 0.0
         opts = {"num_predict": room if sp.get("brief") else 220} if self.fast else ({"num_predict": room} if sp.get("brief") else {})
-        async for ev in deps.pc_backend.chat_stream(messages, None, options=opts, role="smart"):
+        async for ev in deps.pc_backend.chat_stream(messages, None, options=opts, role=model_role(text)):
             if ev["type"] == "token":
                 out.append(ev["text"])
                 sp["answer"] = "".join(out)
@@ -1080,6 +1126,21 @@ class Orchestrator:
             return None
         return Reply(sp["answer"]) if sp["answer"].strip() else None
 
+    async def warm_instructions(self) -> None:
+        """When the computer connects: have both models read Click's standing instructions once, so the first
+        question doesn't wait for that (it's the slow part on processor-only Macs)."""
+        if getattr(self, "_warmed_at", 0) and time.time() - self._warmed_at < 600:
+            return
+        self._warmed_at = time.time()
+        await asyncio.sleep(3)  # let start-up finish first
+        msgs = [{"role": "system", "content": self._system_prompt("pc", False)}, {"role": "user", "content": "hi"}]
+        for role in ("chat", "smart"):
+            try:
+                async for _ in self.deps.pc_backend.chat_stream(msgs, None, options={"num_predict": 1}, role=role):
+                    pass
+            except Exception:  # noqa: BLE001 - only an optimisation
+                return
+
     async def prewarm(self, conversation_id: int | None, partial: str) -> None:
         """While the user types: have the model read the conversation so far, so pressing Enter only
         leaves the last few words to process (the model keeps what it already read)."""
@@ -1094,7 +1155,8 @@ class Orchestrator:
             msgs = [{"role": "system", "content": self._system_prompt("pc", bool(tools))}]
             msgs += self._history(conversation_id, None)
             msgs.append({"role": "user", "content": partial})
-            async for _ in deps.pc_backend.chat_stream(msgs, tools or None, options={"num_predict": 1}, role="smart"):
+            async for _ in deps.pc_backend.chat_stream(msgs, tools or None, options={"num_predict": 1},
+                                                       role=model_role(partial)):
                 pass
         except Exception:  # noqa: BLE001 - only an optimisation
             pass
@@ -1152,7 +1214,7 @@ class Orchestrator:
         for _round in range(max_rounds + 1):
             round_text, calls = [], []
             try:
-                async for ev in backend.chat_stream(messages, tools or None, options=options, role="smart"):
+                async for ev in backend.chat_stream(messages, tools or None, options=options, role=model_role(text)):
                     if state.cancel.is_set():
                         break
                     if ev["type"] == "token":
