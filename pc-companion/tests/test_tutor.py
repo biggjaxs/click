@@ -204,3 +204,26 @@ def test_smart_mode_uses_the_bigger_model_only_when_it_is_here():
     assert inf.smart_model() == "qwen2.5:7b"
     settings["smart_mode"] = False
     assert inf.smart_model() is None  # switched off in the menu bar
+
+
+def test_click_engine_is_used_only_when_on_running_and_ready():
+    from companion.engine import EngineManager
+
+    class S(dict):
+        pass
+
+    s = S()
+    em = EngineManager(s, __import__("pathlib").Path("/tmp/ce-test"))
+    em.ready_models = {"qwen2.5:1.5b"}
+
+    class P:  # a running engine
+        def poll(self):
+            return None
+
+    em.proc = P()
+    assert not em.serves("qwen2.5:1.5b")  # off until switched on in the menu bar
+    s["click_engine"] = True
+    assert em.serves("qwen2.5:1.5b") and em.serves("qwen2.5:1.5b:latest")
+    assert not em.serves("qwen2.5:7b")  # not something Click Engine runs yet: Ollama answers
+    em.proc = None
+    assert not em.serves("qwen2.5:1.5b")  # not running: Ollama answers

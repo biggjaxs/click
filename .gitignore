@@ -10,3 +10,6 @@ dist/
 packaging/Click.iconset/
 packaging/Click.icns
 *.dmg
+engine/click_engine/libclickengine.so
+engine/click_engine/libclickengine.dylib
+engine/build/

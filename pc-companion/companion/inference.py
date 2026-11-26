@@ -146,6 +146,8 @@ class Inference:
         role = payload.get("role")
         model = self.models["vision"] if role == "vision" else (
             (self.smart_model() or self.models["chat"]) if role == "smart" else self.models["chat"])
+        engine = getattr(self, "engine", None)
+        base = engine.url if engine is not None and engine.serves(model) else self.url  # Click Engine or Ollama
         body = {"model": model, "messages": payload.get("messages", []), "stream": True, "keep_alive": KEEP_ALIVE,
                 "options": {"num_ctx": self.num_ctx, "num_thread": THREADS, **(payload.get("options") or {})}}
         if payload.get("tools"):
@@ -157,7 +159,7 @@ class Inference:
         calls: list = []
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(300, connect=5)) as client:
-                async with client.stream("POST", f"{self.url}/api/chat", json=body) as resp:
+                async with client.stream("POST", f"{base}/api/chat", json=body) as resp:
                     if resp.status_code == 400 and "think" in body:
                         raise _RetryWithoutThink()
                     if resp.status_code != 200:

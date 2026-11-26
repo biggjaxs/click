@@ -49,9 +49,22 @@ The test benches in `tools/evals/` (see the bottom) measure most of these with t
 ## Speed
 
 - **Smart mode answers are slower to finish** (7B writes ~7-9 words/s on the i9 vs ~25 for the small model).
-- **Our own engine** (llama.cpp built into Click instead of Ollama) is not built yet. It would make start-up
-  faster and more reliable and allow "speculative decoding" (a tiny model drafts, the big one checks: ~1.5-2x
-  faster). Doesn't improve understanding by itself.
+- **Click Engine (our own, written from scratch) is in beta (v1.27)**: off by default (menu bar > Use Click Engine).
+  It's correct and has every feature (streaming, tool calls, JSON-shaped answers, memory reuse), but it's slower
+  than Ollama: ~11 vs ~18 words/s writing and ~55 vs ~180 tokens/s reading a fresh long prompt (4-core test box).
+  Plan to make it the default:
+  1. Our own 4-bit format with 256-value super-blocks (integer sub-scales, one float step per 256 values instead
+     of per 32): ~2x faster writing (half the memory to read) and ~2-3x faster prompt reading.
+  2. Run the 7B smart model (needs the 4-bit format to be fast enough) and then pictures (a vision encoder).
+  3. Speculative decoding (the 0.5B model drafts, the bigger one checks several words at once).
+  4. Apple Silicon (NEON) version of the math core; today it needs an Intel processor (AVX2).
+  5. Stop a "reading ahead while you type" request as soon as a real question arrives (today they queue).
+
+## Pictures and video games
+
+- **Teaching video games / understanding pictures** isn't done. Needs a vision model: on Ollama now
+  (qwen3-vl 2B, slow on Intel: tens of seconds per screenshot), later in Click Engine. Idea: a "coach" mode that
+  looks at a screenshot only when asked or when the screen changes a lot, and points at what it found.
 
 ## Other
 

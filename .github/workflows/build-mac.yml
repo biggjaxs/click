@@ -105,6 +105,17 @@ jobs:
           packaging/bin/whisper-cli --help > /dev/null 2>&1 || packaging/bin/whisper-cli -h | head -3
           otool -L packaging/bin/whisper-cli
 
+      - name: Build Click Engine (Click's own AI engine)
+        run: |
+          if [ "$(uname -m)" = "x86_64" ]; then
+            clang++ -O3 -mavx2 -mfma -mf16c -std=c++17 -shared -fPIC -mmacosx-version-min=14.0 \
+              -o engine/click_engine/libclickengine.dylib engine/csrc/clickengine.cpp
+            (cd engine && python -m pytest -q)
+            python -c "import sys; sys.path.insert(0, 'engine'); from click_engine.model import lib; lib(); print('engine core loads')"
+          else
+            echo "Click Engine needs an Intel processor for now (AVX2); skipping on Apple Silicon"
+          fi
+
       - name: Build Click.app
         run: |
           pyinstaller --noconfirm --distpath dist --workpath build packaging/Click.spec
@@ -148,6 +159,22 @@ jobs:
           grep -q "SELFTEST UI OK" selftest.log || echo "::warning::chat page didn't display in the headless test"
           grep -q "SELFTEST VOICE OK" selftest.log || { echo "::error::voice isn't fully inside the app"; grep VOICE selftest.log; exit 1; }
           file dist/Click.app/Contents/MacOS/Click
+
+      - name: Click Engine answers inside the finished app (small model)
+        run: |
+          if [ "$(uname -m)" != "x86_64" ]; then echo "Intel only for now"; exit 0; fi
+          grep -q "SELFTEST ENGINE OK" selftest.log || { echo "::error::Click Engine isn't inside the app"; grep ENGINE selftest.log; exit 1; }
+          mkdir -p "$RUNNER_TEMP/models"
+          curl -sL -o "$RUNNER_TEMP/models/qwen2.5-0.5b-instruct-q8_0.gguf" \
+            https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf
+          dist/Click.app/Contents/MacOS/Click --engine-server --port 11436 --models "$RUNNER_TEMP/models" > engine.log 2>&1 &
+          for i in $(seq 1 60); do curl -s localhost:11436/api/version && break; sleep 1; done
+          curl -s localhost:11436/api/tags
+          time curl -s localhost:11436/api/chat -d '{"model":"qwen2.5:0.5b","stream":false,"options":{"temperature":0,"num_predict":30},"messages":[{"role":"user","content":"What is the capital of France? One short sentence."}]}' | tee answer.json
+          grep -qi "paris" answer.json || { echo "::error::Click Engine didn't answer correctly"; cat engine.log; exit 1; }
+          curl -s localhost:11436/api/chat -d '{"model":"qwen2.5:0.5b","stream":false,"format":{"type":"object","properties":{"city":{"type":"string","enum":["Paris","Rome"]}},"required":["city"]},"options":{"temperature":0},"messages":[{"role":"user","content":"Capital of France as JSON."}]}' | tee shaped.json
+          python -c "import json; d=json.load(open('shaped.json')); assert json.loads(d['message']['content'])['city']=='Paris'; print('JSON answer OK')"
+          kill %1 || true
 
       - name: Real start (like a person opening it after an update) - the chat must connect and answer
         run: |

@@ -57,6 +57,10 @@ class App:
         self.screen = ScreenService(self.platform, self.settings)
         self.files = FileService(self.settings)
         self.inference = Inference(self.settings, self.models)
+        from .engine import EngineManager
+
+        self.engine = EngineManager(self.settings, config.config_dir())
+        self.inference.engine = self.engine
         self.imagegen = ImageGenerator(self.models, self.settings)
         self.actions = Actions(self.bridge, self.ghost, self.screen, self.platform, self.settings)
         from .skills import Skills
@@ -290,6 +294,17 @@ class App:
         if self.server.loop:
             fut = asyncio.run_coroutine_threadsafe(self.inference.warm_up(), self.server.loop)
             fut.add_done_callback(lambda _f: self._maybe_get_smart())
+        if self.settings.get("click_engine", False) and not self.selftest:
+            self.engine.start(lambda text: self.bridge.voiceStatus.emit(text))
+
+    def set_click_engine(self, on: bool) -> None:
+        """Menu bar > Use Click Engine (beta)."""
+        self.settings.set("click_engine", bool(on))
+        if on:
+            self.engine.start(lambda text: self.bridge.voiceStatus.emit(text))
+        else:
+            self.engine.stop()
+            self.bridge.voiceStatus.emit("Click Engine is off: answers use Ollama again.")
 
     def _maybe_get_smart(self) -> None:
         inf = self.inference
@@ -587,6 +602,13 @@ class App:
                         from .voice import engine_path
 
                         print("SELFTEST VOICE", "OK" if engine_path() else "NO ENGINE", flush=True)
+                        try:
+                            from click_engine.model import lib as _engine_lib
+
+                            _engine_lib()
+                            print("SELFTEST ENGINE OK", flush=True)
+                        except Exception as exc:  # noqa: BLE001
+                            print("SELFTEST ENGINE MISSING", exc, flush=True)
                     except Exception as exc:  # noqa: BLE001
                         print("SELFTEST VOICE FAILED", exc, flush=True)
                 print("SELFTEST OK", st["pc"]["pc_name"], flush=True)
@@ -1456,6 +1478,10 @@ _crash_file = None
 
 
 def main() -> int:
+    if "--engine-server" in sys.argv:  # Click's own AI engine, running as a helper (see engine.py)
+        from .engine import run_server_from_argv
+
+        return run_server_from_argv(sys.argv)
     if "--selftest-sign" in sys.argv:  # build check: can this Mac stamp Click with its own signature?
         from .selfsign import selftest
 

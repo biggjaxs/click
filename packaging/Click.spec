@@ -11,6 +11,7 @@ ROOT = Path(SPECPATH).parent
 HUB = ROOT / "pi-hub"
 COMP = ROOT / "pc-companion"
 SHARED = ROOT / "shared"
+ENGINE = ROOT / "engine"
 
 datas = [
     (str(HUB / "app" / "static"), "app/static"),
@@ -21,10 +22,15 @@ binaries = []
 _whisper = Path(SPECPATH) / "bin" / "whisper-cli"  # offline speech engine, built by the workflow
 if _whisper.exists():
     binaries.append((str(_whisper), "bin"))
+_engine_core = ENGINE / "click_engine" / "libclickengine.dylib"  # Click's own AI engine (built by the workflow)
+if _engine_core.exists():
+    binaries.append((str(_engine_core), "click_engine"))
 hiddenimports = (
     ["app.main", "click_protocol", "click_protocol.tls"]
     + collect_submodules("app")
     + collect_submodules("companion")
+    + collect_submodules("click_engine")
+    + ["regex"]
     + (["sounddevice", "_sounddevice_data", "Foundation", "Quartz"] if sys.platform == "darwin" else [])
     + collect_submodules("uvicorn")
     + collect_submodules("websockets")
@@ -62,7 +68,7 @@ except ImportError:
 
 a = Analysis(
     [str(COMP / "click_app.py")],
-    pathex=[str(COMP), str(HUB), str(SHARED)],
+    pathex=[str(COMP), str(HUB), str(SHARED), str(ENGINE)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

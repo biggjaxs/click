@@ -9,7 +9,7 @@ async def chat(msgs, tools=None, fmt=None, options=None):
     body = {"model": MODEL, "messages": msgs, "stream": True, "format": fmt, "options": dict(options or {}, num_thread=4),
             "keep_alive": "1h"}
     async with httpx.AsyncClient(timeout=300) as c:
-        async with c.stream("POST", "http://127.0.0.1:11434/api/chat", json=body) as r:
+        async with c.stream("POST", __import__("os").environ.get("ENGINE_URL", "http://127.0.0.1:11434") + "/api/chat", json=body) as r:
             async for line in r.aiter_lines():
                 if line:
                     d = json.loads(line)
