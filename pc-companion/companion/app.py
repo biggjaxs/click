@@ -150,6 +150,8 @@ class App:
         self.ask.talk.connect(self.talk)
         self.ask.context_fn = self._lesson_context
         self.ask.command_fn = self._typed_lesson_command
+        self.ask.stop_fn = self.stop_everything
+        self.ask.keep_fn = lambda: bool(self.lesson.get("active"))
         self.bridge.heard.connect(self._on_heard)
         self.bridge.voiceLevel.connect(self.ask.mic.set_level)
         self.bridge.voiceStatus.connect(self.ask.set_status)
@@ -233,7 +235,7 @@ class App:
         stated plainly (so Clicky never fails silently)."""
         self._show_orb()
         self.tile.url and self.tile.show_chat()  # load the full chat in the background, ready when wanted
-        QTimer.singleShot(700, lambda: self.ask and not self.ask.isVisible() and self.ask.toggle(self.bubble))
+        # the Ask box stays closed until you click the orb (less in your way)
         QTimer.singleShot(1400, self.ghost.hello)
         QTimer.singleShot(2500, self._report_permissions)
 
@@ -606,6 +608,38 @@ class App:
             self.bridge.narrate.emit(str(payload.get("text", ""))[:160])
         elif (service, action) == ("system", "pause"):
             self._set_paused(bool(payload.get("paused")), from_pi=True)
+        elif (service, action) == ("system", "stop_all"):
+            self.stop_everything(from_pi=True)
+        elif (service, action) == ("system", "lesson_cmd"):
+            cmd = payload.get("cmd")
+            if self.lesson.get("active") and cmd in ("next", "back", "repeat", "stop"):
+                self.lesson["cmd"] = cmd
+                self.lesson["interrupt"].set()
+
+    def stop_everything(self, from_pi: bool = False) -> None:
+        """Stop: the lesson, any task Clicky is doing, speaking and listening. (Timers and music you started
+        keep going; say "stop the music" or "stop the focus timer" for those.)"""
+        if self.lesson.get("active"):
+            self.lesson["cmd"] = "stop"
+            self.lesson["interrupt"].set()
+        self.actions.killed.set()  # every running step checks this and stops
+        try:
+            from .voice import stop_speaking
+
+            stop_speaking()
+            if getattr(self, "voice", None) is not None:
+                self.voice.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self.bridge.ghostRest.emit()
+
+        def release():
+            if not self.paused:
+                self.actions.killed.clear()
+
+        threading.Timer(1.5, release).start()
+        if not from_pi:
+            self.server.send_event_threadsafe("system", "stop", {})
 
     async def capabilities(self) -> dict:
         return {
@@ -701,6 +735,20 @@ class App:
         reply = self.brain.answer_pending(text) if getattr(self, "brain", None) else None
         if reply:  # "no thanks" / "stop suggesting that" right after an offer
             self.ask.set_status(reply)
+            return True
+        import re as _re
+
+        speaking = False
+        try:
+            from .voice import speaking as _speaking
+
+            speaking = _speaking()
+        except Exception:  # noqa: BLE001
+            pass
+        if _re.fullmatch(r"(?:ok(?:ay)?[, ]+)?(?:stop|stop it|stop that|stop everything|cancel|cancel it|cancel that|"
+                         r"never ?mind|halt|enough|that'?s enough|quit it|shut up|be quiet|hush)(?: please)?[.!]*",
+                         text.strip().lower()) and (self.ask.busy or self.lesson.get("active") or speaking):
+            self.ask.stop_all()  # "stop" while something is going on: stop it all, right now
             return True
         if not self.lesson.get("active"):
             return False

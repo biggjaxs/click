@@ -31,7 +31,7 @@ def test_it_that_and_again():
     assert steps("close it", st) == [{"skill": "quit_app", "app": "Spotify"}]
     p = plan("play Levitating", st)
     remember(st, p["plan"], p["summary"])
-    assert steps("play it again", st)[-1] == {"skill": "play_music", "query": "Levitating"}
+    assert {k: steps("play it again", st)[-1][k] for k in ("skill", "query")} == {"skill": "play_music", "query": "Levitating"}
     assert steps("do it again", st) == p["plan"]
     remember(st, [{"skill": "open_app", "app": "Notes"}], "Open Notes")
     assert steps("type hello in it", st)[-1] == {"skill": "new_note", "text": "hello"}
@@ -63,8 +63,13 @@ def test_titles_and_values_never_include_command_words():
 
 
 def test_indirect_requests_and_typos():
-    assert steps("I want to listen to Levitating")[-1] == {"skill": "play_music", "query": "Levitating"}
-    assert steps("put on some Drake")[-1] == {"skill": "play_music", "query": "Drake"}
+    assert steps("I want to listen to Levitating")[-1]["query"] == "Levitating"
+    drake = steps("put on some Drake")[-1]
+    assert drake["query"] == "Drake" and drake["hint"] == "artist" and drake["shuffle"]
+    song = steps("play blinding lights by the weeknd")[-1]
+    assert song["song"] == "blinding lights" and song["artist"] == "the weeknd" and song["kind"] == "song"
+    assert steps("play my workout playlist")[-1]["playlist"] == "workout"
+    assert steps("play songs by taylor swift")[-1]["artist"] == "taylor swift"
     assert steps("I need to write down eggs and milk") == [{"skill": "new_note", "text": "eggs and milk"}]
     assert steps("let me check my email") == [{"skill": "open_app", "app": "Mail"}]
     assert steps("opne safari") == [{"skill": "open_app", "app": "Safari"}]

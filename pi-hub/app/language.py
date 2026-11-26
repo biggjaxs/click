@@ -398,11 +398,19 @@ def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
                 r"^(?:go\s+)?back\s+(?:a|one)\s+(?:song|track)$", low):
         return [{"skill": "music_control", "action": "previous"}]
     # play a song
-    m = re.match(r"^play\s+(?P<q>.+?)(?:\s+(?:on|in|from|with)\s+(?:apple\s+)?music(?:\s+app)?)?$", c, re.I)
-    if m and not re.match(r"^(?:(?:some\s+)?music|something|anything|a\s+song|some\s+songs?)$", m.group("q"), re.I):
-        q = _clean_song(re.sub(r"^(?:some|a\s+little|a\s+bit\s+of)\s+", "", m.group("q"), flags=re.I))
-        if q:
-            return [{"skill": "open_app", "app": "Music"}, {"skill": "play_music", "query": q}]
+    m = re.match(r"^(?:play|shuffle)\s+(?P<q>.+?)(?:\s+(?:on|in|from|with)\s+(?:apple\s+)?music(?:\s+app)?)?$", c, re.I)
+    if m and not re.match(r"^(?:(?:some\s+)?music|a\s+song|some\s+songs?)$", m.group("q"), re.I):
+        from . import music
+
+        raw = m.group("q") if not low.startswith("shuffle") else "shuffle " + m.group("q")
+        req = music.parse(raw)  # artist / song by artist / album / playlist, matched to the library on the Mac
+        shown = (f"{req['song']} by {req['artist']}" if req.get("song") and req.get("artist") else
+                 req.get("song") or req.get("artist") or req.get("album") or req.get("playlist") or req.get("name")
+                 or {"favorites": "your favorite songs", "library": "your music"}.get(req.get("kind"), ""))
+        if shown:
+            step = {"skill": "play_music", "query": shown[:80]}
+            step.update({k: v for k, v in req.items() if k != "query"})
+            return [{"skill": "open_app", "app": "Music"}, step]
     if re.match(r"^play\s+(?:some\s+)?music$", low):
         return [{"skill": "open_app", "app": "Music"}, {"skill": "music_control", "action": "play"}]
     # new note (optionally with its contents)
@@ -799,6 +807,10 @@ def validate_llm_plan(data: dict) -> list[dict] | None:
             s["pane"] = pane
         clean = {"skill": k, **{f: str(s[f])[:2000] for f in ("app", "text", "compose", "query", "pane", "url", "action",
                                                               "title", "to", "subject", "keys") if s.get(f)}}
+        if k == "play_music":  # "Blinding Lights by The Weeknd": know the song AND the artist
+            from . import music
+
+            clean.update({f: v for f, v in music.parse(clean["query"]).items() if f != "query"})
         if k in ("dark_mode", "wifi"):
             clean["on"] = bool(s.get("on"))
         if k == "focus":

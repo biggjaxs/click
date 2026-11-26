@@ -116,6 +116,21 @@ BRIEF_NOTE = ("(Reply in at most two short sentences: this answer shows in a sma
               "\"Open the full chat for more.\")")
 
 
+DETAIL_NOTE = ("(This shows in Click's small chat: explain clearly in up to 8 short lines. Use a short numbered list "
+               "for steps and plain words for a beginner. No long introductions.)")
+_DETAIL_RE = re.compile(r"\b(?:explain|how\s+(?:does|do|did|can|would|should|to)|why|what(?:'s|\s+is)\s+the\s+difference|"
+                        r"compare|difference\s+between|step[-\s]by[-\s]step|walk\s+me|teach|tell\s+me\s+(?:about|more)|"
+                        r"what\s+(?:does|are|is)\s+.{3,}\s+(?:mean|for|used)|pros\s+and\s+cons|help\s+me\s+understand|"
+                        r"in\s+detail|break\s+(?:it|this)\s+down|summar)", re.I)
+
+
+def brief_note(text: str) -> tuple[str, int]:
+    """Short for quick questions; room to really explain when they ask for an explanation."""
+    if _DETAIL_RE.search(text or ""):
+        return DETAIL_NOTE, 360
+    return BRIEF_NOTE, 130
+
+
 class TurnState:
     def __init__(self):
         self.cancel = asyncio.Event()
@@ -126,6 +141,7 @@ class Orchestrator:
     def __init__(self, deps):
         self.deps = deps
         self.incognito_sessions: dict[str, list[dict]] = {}
+        self.lesson_active = False  # a live lesson is running (questions and "next" can come in meanwhile)
         self.dialog: dict = {}  # conversation -> what "it" / "that" / "again" refer to (language.DialogState)
         self.screen_context: dict | None = None  # filled by watch mode
         self.background: set[asyncio.Task] = set()
@@ -562,6 +578,7 @@ class Orchestrator:
             # background knowledge for complex apps; the lesson starts right away and uses it once it's ready
             reference = asyncio.create_task(self._lesson_reference(title, None))
         await send({"type": "tool", "name": "click", "status": "running", "caption": f"{title}: follow Clicky"})
+        self.lesson_active = True
         lesson = Lesson(title, goal, steps, deps.link, deps.pc_backend.chat_stream, send,
                         installed=deps.db.get_setting("installed_apps", []) or [], reference_task=reference)
         try:
@@ -570,6 +587,7 @@ class Orchestrator:
             written = f"(Clicky couldn't show it on screen: {exc})"
             await send({"type": "token", "text": written})
         finally:
+            self.lesson_active = False
             if reference is not None and not reference.done():
                 reference.cancel()
         await send({"type": "tool", "name": "click", "status": "done"})
@@ -1025,12 +1043,13 @@ class Orchestrator:
                 web = ""
         messages = [{"role": "system", "content": self._system_prompt("pc", False)}]
         messages += self._history(conv, None) if conv else []
-        brief = f"\n\n{BRIEF_NOTE}" if sp.get("brief") else ""
+        note, room = brief_note(text)
+        brief = f"\n\n{note}" if sp.get("brief") else ""
         messages.append({"role": "user",
                          "content": f"{self._context_block(recalled, conv, False, None)}{web}\n\n{text}{brief}"})
         out: list[str] = []
         last_sent = 0.0
-        opts = {"num_predict": 130 if sp.get("brief") else 220} if self.fast else ({"num_predict": 130} if sp.get("brief") else {})
+        opts = {"num_predict": room if sp.get("brief") else 220} if self.fast else ({"num_predict": room} if sp.get("brief") else {})
         async for ev in deps.pc_backend.chat_stream(messages, None, options=opts):
             if ev["type"] == "token":
                 out.append(ev["text"])
@@ -1109,8 +1128,8 @@ class Orchestrator:
         tools = select_tools(deps, text) if source == "pc" and "Don't call any tools" not in (memory_note or "") else []
         options = {"num_predict": 220} if self.fast else {}
         if getattr(state, "brief", False):
-            options["num_predict"] = 130
-            memory_note = (memory_note + "\n" if memory_note else "") + BRIEF_NOTE
+            options["num_predict"] = brief_note(text)[1]
+            memory_note = (memory_note + "\n" if memory_note else "") + brief_note(text)[0]
         max_rounds = 3 if self.fast else deps.cfg.max_tool_rounds
         messages = [{"role": "system", "content": self._system_prompt(source, bool(tools))}]
         messages += self._history(conversation_id, incognito_key)

@@ -495,7 +495,7 @@ class GhostController(QObject):
         else:  # appear at the chat tile and travel, so the movement is easy to follow
             start = self.home or (x - 200, y - 140)
         dist = math.hypot(x - start[0], y - start[1])
-        duration = max(0.55, min(1.1, 0.35 + dist / 1800))
+        duration = max(0.4, min(0.8, 0.3 + dist / 2400))  # quick, still easy to follow
         self._clear_way(x, y)
         self.x, self.y = start
         self._anim = {"from": start, "to": (x, y), "t0": time.time(), "dur": duration}

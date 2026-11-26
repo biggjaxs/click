@@ -123,7 +123,10 @@ class MacPlatform(Platform):
             return []
         out: list[Element] = []
         stack = [(root, 0)]
-        while stack and len(out) < max_elements:
+        import time as _t
+
+        stop_at = _t.time() + 1.2  # huge windows: take what we have rather than make the user wait
+        while stack and len(out) < max_elements and _t.time() < stop_at:
             el, depth = stack.pop()
             children = _attr(el, "AXChildren") or []
             if depth < 25:
@@ -186,6 +189,37 @@ class MacPlatform(Platform):
                     out.append(Element(name=str(title), role="DockItem", rect=rect, window_title="Dock"))
         return out
 
+    def screen_signature(self):
+        """Front app + its windows (titles, sizes) + open menus/pop-ups + whether the focused box has text.
+        Built from the window list (no reading of window contents) and, for text boxes, only the LENGTH of
+        what's in them (never the text itself), so a lesson can tell when you've typed something."""
+        opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+        info = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []
+        front = NSWorkspace.sharedWorkspace().frontmostApplication()
+        fpid = front.processIdentifier() if front else -1
+        wins, menus = [], 0
+        for w in info:
+            pid = int(w.get("kCGWindowOwnerPID", 0))
+            if pid == _OWN_PID:
+                continue
+            layer = int(w.get("kCGWindowLayer", 0))
+            if pid == fpid and layer == 0:
+                b = w.get("kCGWindowBounds", {})
+                wins.append((str(w.get("kCGWindowName", "") or "")[:80], int(b.get("Width", 0)) // 10,
+                             int(b.get("Height", 0)) // 10))
+            elif layer in (101, 3, 8, 19, 20, 24, 25) and int(w.get("kCGWindowBounds", {}).get("Height", 0)) > 20:
+                menus += 1  # an open menu, pop-up, sheet or popover
+        typed = 0
+        try:
+            el = _attr(AXUIElementCreateSystemWide(), "AXFocusedUIElement")
+            if el is not None and (_attr(el, "AXRole") or "") in ("AXTextField", "AXTextArea", "AXComboBox",
+                                                                  "AXSearchField") \
+                    and (_attr(el, "AXSubrole") or "") != "AXSecureTextField":
+                typed = len(str(_attr(el, "AXValue") or ""))  # how much, never what
+        except Exception:  # noqa: BLE001
+            pass
+        return (front.localizedName() if front else "", tuple(sorted(wins)), menus), typed
+
     def app_menus(self) -> list[Element]:
         """The front app's own menus (File, Edit, View...) and the items of a menu that's open right now
         (from the menu bar, or a right-click menu), so a lesson can point at 'New Folder' inside 'File'."""
@@ -213,7 +247,17 @@ class MacPlatform(Platform):
                 continue
             el = Element(name=str(name)[:80], role="MenuBarItem", rect=rect, window_title="Menu bar")
             # what's inside this menu (readable even while it's closed): lets a lesson know that
-            # "New Private Window" is under File before anything is opened
+            # "New Private Window" is under File before anything is opened. Menus rarely change, so this
+            # is remembered for a few minutes per app (reading every menu each step would be slow).
+            ck = (front.processIdentifier(), str(name))
+            hit = self._menu_cache.get(ck) if hasattr(self, "_menu_cache") else None
+            if hit and __import__("time").time() - hit[0] < 300:
+                el.extra["items"] = hit[1]
+                out.append(el)
+                if _attr(item, "AXSelected"):
+                    for menu in _attr(item, "AXChildren") or []:
+                        menu_items(menu)
+                continue
             inside = []
             for menu in _attr(item, "AXChildren") or []:
                 for it in (_attr(menu, "AXChildren") or [])[:40]:
@@ -226,6 +270,9 @@ class MacPlatform(Platform):
                                 if u:
                                     inside.append(f"{str(t)[:30]} > {str(u)[:30]}")
             el.extra["items"] = inside
+            if not hasattr(self, "_menu_cache"):
+                self._menu_cache = {}
+            self._menu_cache[ck] = (__import__("time").time(), inside)
             out.append(el)
             if _attr(item, "AXSelected"):  # this menu is open: its items are on screen
                 for menu in _attr(item, "AXChildren") or []:

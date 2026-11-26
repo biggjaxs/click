@@ -86,7 +86,7 @@ def free_disk_gb() -> float:
 
 
 class Brain:
-    GAP = 8 * 60  # at least this long between offers
+    GAP = 15 * 60  # at least this long between offers (it should never feel like a bother)
 
     def __init__(self, app, tick: float = 4.0):
         self.app = app

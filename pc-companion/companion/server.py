@@ -174,6 +174,10 @@ class CompanionServer:
                     log.warning("bad message: %s", exc)
                     continue
                 if msg["type"] == "event":
+                    if (msg["service"], msg["action"]) == ("system", "stop_all"):
+                        for t in list(tasks):  # Stop: end every request in progress (lesson, task...)
+                            if not t.done():
+                                t.cancel()
                     if (msg["service"], msg["action"]) == ("inference", "cancel"):
                         t = by_id.get(str(msg["payload"].get("request_id")))
                         if t and not t.done():

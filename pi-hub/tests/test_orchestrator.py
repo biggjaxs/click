@@ -301,7 +301,8 @@ def test_notes_and_music_tasks(services):
     plans = [c[2]["plan"] for c in calls if c[:2] == ("skills", "run")]
     assert plans[0][0] == {"skill": "open_app", "app": "Notes"} and plans[0][1]["skill"] == "new_note"
     assert any(ch.isdigit() for ch in plans[0][1]["text"])  # the real date/time, not the words
-    assert plans[1] == [{"skill": "open_app", "app": "Music"}, {"skill": "play_music", "query": "Levitating"}]
+    assert plans[1][0] == {"skill": "open_app", "app": "Music"}
+    assert plans[1][1]["skill"] == "play_music" and plans[1][1]["song"] == "Levitating" and plans[1][1]["artist"] == "Dua Lipa"
 
 
 def test_where_is_x_on_my_home_screen_points(services):
@@ -784,3 +785,44 @@ def test_asking_to_be_taught_never_does_it_for_you(services):
                                          incognito_key=None, state=_state()))
         did = [c[:2] for c in calls if c[:2] in (("skills", "run"), ("cursor", "click"), ("cursor", "type_text"))]
         assert mac.shown and not did, (text, did)
+
+
+def test_stop_ends_every_answer_and_task_and_tells_the_computer(services):
+    import asyncio as _a
+
+    from app import main as hub_main
+    from app.orchestrator import TurnState
+
+    sent = []
+
+    async def go():
+        async def ev(*a, **k):
+            sent.append(a)
+
+        services.link.connected = True
+        services.link.send_event = ev
+        st = TurnState()
+
+        async def long_task():  # e.g. a lesson waiting for the user
+            await _a.sleep(30)
+
+        t = _a.create_task(long_task())
+        services.turns = {(t, st)}
+        await hub_main.stop_all_turns(services)
+        await _a.sleep(0)
+        return t, st
+
+    t, st = run(go())
+    assert st.cancel.is_set() and t.cancelled()
+    assert ("system", "stop_all", {}) in sent
+
+
+def test_stop_words_and_lesson_commands():
+    from app.main import _STOP_RE, _lesson_cmd
+
+    for t in ("stop", "Stop!", "okay stop it", "cancel that", "never mind", "nevermind", "stop everything please"):
+        assert _STOP_RE.match(t), t
+    for t in ("stop the music", "stop the focus timer", "stop motion animation tips"):
+        assert not _STOP_RE.match(t), t
+    assert _lesson_cmd("next") == "next" and _lesson_cmd("ok I did it") == "next" and _lesson_cmd("go back") == "back"
+    assert _lesson_cmd("where is the save button") is None

@@ -336,6 +336,14 @@ function finishTurn(ev = {}) {
 // ---------- Sending ----------
 async function submit(text) {
   text = text.trim();
+  if (text && state.busy) {
+    // while Clicky works: "stop", "next", "back", or a question about the lesson step still get through
+    if (send({ type: "command", text, conversation_id: state.incognito ? null : state.conversationId })) {
+      $("#input").value = ""; autosize();
+      toast(/^(ok(ay)?[, ]+)?(stop|cancel|never ?mind|enough)/i.test(text) ? "Stopping" : "Got it");
+    }
+    return;
+  }
   if ((!text && !state.uploads.length) || state.busy) return;
   const uploads = state.uploads.slice();
   if (!send({ type: "send", text: text || "(see attachment)", conversation_id: state.incognito ? null : state.conversationId,

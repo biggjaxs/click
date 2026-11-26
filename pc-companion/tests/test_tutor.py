@@ -100,12 +100,12 @@ def test_clicky_arrives_first_then_the_words_and_never_clicks():
     t = tutor.Tutor(app)
     t.begin("How to send an email")
 
-    def wait(rect, timeout, lesson, outside):  # no real mouse here: the user says "next" instead
+    def wait(rect, timeout, lesson, kind):  # no real mouse here: the user says "next" instead
         threading.Timer(0.2, lambda: (lesson.update(cmd="next"), lesson["interrupt"].set())).start()
         lesson["interrupt"].wait(3)
-        return False
+        return "command"
 
-    t._wait_click = wait
+    t._watch = wait
     res = asyncio.run(t.show_step({"step": 1, "say": "Click New Message.", "element_id": eid, "kind": "click"}))
     kinds = [e[0] for e in app.log]
     assert kinds[:3] == ["ghostMove", "ghostHighlight", "ghostMove"]
@@ -131,3 +131,54 @@ def test_open_app_step_waits_for_you_to_open_it():
     res = asyncio.run(go())
     assert res["result"] == "app_open"
     assert app.log[1][0] == "ghostHighlight" and app.log[1][1:3] == (500.0, 860.0)  # pointed at the Dock icon
+
+
+class SigPlatform(FakePlatform):
+    """The screen's fingerprint changes when `changed` is set (a menu opened, the user typed...)."""
+
+    def __init__(self):
+        super().__init__([])
+        self.sig = (("Mail", (), 0), 0)
+
+    def screen_signature(self):
+        return self.sig
+
+
+def _tutor_with(plat):
+    app = FakeApp(plat, FakeScreen())
+    t = tutor.Tutor(app)
+    t.begin("x")
+    return app, t
+
+
+def test_moves_on_by_itself_when_the_screen_changes():
+    plat = SigPlatform()
+    app, t = _tutor_with(plat)
+    threading.Timer(0.4, lambda: setattr(plat, "sig", (("Mail", (("New Message", 60, 40),), 0), 0))).start()
+    t0 = __import__("time").time()
+    res = asyncio.run(t._wait({"kind": "click", "timeout": 10}, Rect(1, 1, 5, 5), None, app.lesson))
+    assert res["result"] == "next" and res["how"] == "changed"
+    assert __import__("time").time() - t0 < 1.5  # right away, not after a fixed pause
+
+
+def test_typing_step_moves_on_after_you_type_and_pause():
+    plat = SigPlatform()
+    app, t = _tutor_with(plat)
+
+    def typing():
+        import time as _tt
+        for n in (3, 8, 14):
+            plat.sig = (plat.sig[0], n)  # only how MUCH is in the box is known, never what
+            _tt.sleep(0.3)
+
+    threading.Thread(target=typing).start()
+    res = asyncio.run(t._wait({"kind": "type", "timeout": 10}, Rect(1, 1, 5, 5), None, app.lesson))
+    assert res["result"] == "next" and res["how"] == "typed"
+
+
+def test_explain_only_steps_carry_on_after_reading_time():
+    plat = SigPlatform()
+    app, t = _tutor_with(plat)
+    t0 = __import__("time").time()
+    res = asyncio.run(t._wait({"kind": "look", "say": "Look at the panel.", "timeout": 30}, None, None, app.lesson))
+    assert res["result"] == "next" and __import__("time").time() - t0 < 6

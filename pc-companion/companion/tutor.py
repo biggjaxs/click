@@ -224,7 +224,7 @@ class Tutor:
         # 1) glide there silently, 2) light up the box, 3) THEN show + say the words (they arrive together)
         app.bridge.ghostMove.emit(float(x), float(y), "")
         dist = ((x - app.ghost.x) ** 2 + (y - app.ghost.y) ** 2) ** 0.5 if app.ghost.visible else 600
-        await asyncio.sleep(max(0.55, min(1.1, 0.35 + dist / 1800)) + 0.05)
+        await asyncio.sleep(max(0.4, min(0.8, 0.3 + dist / 2400)))
         if rect is not None:
             app.bridge.ghostHighlight.emit(float(rect.x), float(rect.y), float(rect.w), float(rect.h), "__step__")
         app.bridge.ghostMove.emit(float(x), float(y), caption)
@@ -235,54 +235,89 @@ class Tutor:
         return await self._wait(p, rect, want_app, lesson)
 
     async def _wait(self, p: dict, rect: Rect | None, want_app: str | None, lesson: dict) -> dict:
+        """Wait until the user has done the step, then return at once (no fixed pauses):
+        - they clicked the highlighted thing, or
+        - the screen changed because of what they did (a menu opened, a window appeared or changed, a
+          keyboard shortcut...), or
+        - for typing steps: they typed something and paused, or
+        - they said next / back / repeat / stop, or the time ran out."""
         app = self.app
         timeout = float(p.get("timeout") or 180)
         kind = p.get("kind") or "click"
-        end = time.time() + timeout
         if want_app:  # wait until they've opened the app themselves
+            end = time.time() + timeout
             while time.time() < end:
                 if lesson["interrupt"].is_set():
                     return {"result": lesson.get("cmd") or "next"}
                 w = await asyncio.to_thread(app.platform.active_window)
                 if w and want_app.lower() in (w.app or "").lower():
-                    await asyncio.sleep(0.8)  # let its window finish appearing
+                    await asyncio.sleep(0.5)  # let its window finish appearing
                     return {"result": "app_open"}
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.25)
             return {"result": "timeout"}
-        if kind in ("look", "type") or rect is None or sys.platform != "darwin":
-            # nothing to click (or typing): they say "next" when ready; a click elsewhere also moves on
-            got = await asyncio.to_thread(self._wait_click, None, timeout if kind != "look" else min(timeout, 25),
-                                          lesson, kind == "type")
-            return {"result": lesson.get("cmd") or ("clicked" if got else ("next" if kind == "look" else "timeout"))}
-        got = await asyncio.to_thread(self._wait_click, rect, timeout, lesson, False)
-        if got:
-            await asyncio.sleep(0.6)  # let the app react (a menu opens, a window appears) before looking again
-            return {"result": "clicked"}
-        return {"result": lesson.get("cmd") or "timeout"}
+        if kind == "look":
+            words = len(str(p.get("say") or "").split())
+            timeout = min(timeout, max(4.0, words / 2.6 + 2.5))  # time to read it, then carry on
+        res = await asyncio.to_thread(self._watch, rect, timeout, lesson, kind)
+        if res in ("clicked", "changed", "typed"):
+            return {"result": "clicked" if res == "clicked" else "next", "how": res}
+        if res == "timeout" and kind == "look":
+            return {"result": "next", "how": "read"}
+        return {"result": lesson.get("cmd") or res}
 
-    def _wait_click(self, rect: Rect | None, timeout: float, lesson: dict, outside: bool) -> bool:
-        """True when they click inside `rect` (or, with outside=True, anywhere OUTSIDE it, e.g. after typing).
-        With rect=None: never true (waits for next/back/stop or the timeout)."""
+    def _watch(self, rect: Rect | None, timeout: float, lesson: dict, kind: str) -> str:
         killed = self.app.actions.killed
+        plat = self.app.platform
         end = time.time() + timeout
-        if sys.platform != "darwin":
-            while time.time() < end and not lesson["interrupt"].is_set() and not killed.is_set():
-                time.sleep(0.1)
-            return False
-        import Quartz
-
         box = Rect(rect.x - 10, rect.y - 10, rect.w + 20, rect.h + 20) if rect else None
-        was_down = True  # ignore a press that was already happening
-        while time.time() < end and not lesson["interrupt"].is_set() and not killed.is_set():
-            down = Quartz.CGEventSourceButtonState(Quartz.kCGEventSourceStateCombinedSessionState, 0) or \
-                Quartz.CGEventSourceButtonState(Quartz.kCGEventSourceStateCombinedSessionState, 1)
-            if down and not was_down and box is not None:
-                loc = Quartz.CGEventGetLocation(Quartz.CGEventCreate(None))
-                if box.contains(loc.x, loc.y) != outside:
-                    return True
-            was_down = down
-            time.sleep(0.04)
-        return False
+        quartz = None
+        if sys.platform == "darwin":
+            try:
+                import Quartz as quartz  # noqa: N813
+            except ImportError:
+                quartz = None
+        try:
+            base = plat.screen_signature()
+        except Exception:  # noqa: BLE001
+            base = None
+        was_down = True
+        clicked_at = None
+        last_len, last_change = (base[1] if base else 0), time.time()
+        typed = False
+        while time.time() < end:
+            if lesson["interrupt"].is_set() or killed.is_set():
+                return "stopped" if killed.is_set() else "command"
+            now = time.time()
+            if quartz is not None:
+                st = quartz.kCGEventSourceStateCombinedSessionState
+                down = quartz.CGEventSourceButtonState(st, 0) or quartz.CGEventSourceButtonState(st, 1)
+                if down and not was_down:
+                    loc = quartz.CGEventGetLocation(quartz.CGEventCreate(None))
+                    if box is not None and box.contains(loc.x, loc.y) and kind == "click":
+                        clicked_at = now  # clicked it: give the app a moment to react, then move on
+                was_down = down
+            if clicked_at and now - clicked_at > 0.25:
+                return "clicked"
+            if base is not None and now - getattr(self, "_last_sig", 0) >= 0.25:
+                self._last_sig = now
+                try:
+                    sig = plat.screen_signature()
+                except Exception:  # noqa: BLE001
+                    sig = None
+                if sig is not None:
+                    if kind == "type":
+                        if sig[1] != last_len:
+                            typed = typed or sig[1] > 0
+                            last_len, last_change = sig[1], now
+                        elif typed and now - last_change > 1.8:
+                            return "typed"  # they typed something and paused
+                        if sig[0] != base[0] and typed:
+                            return "changed"
+                    elif sig[0] != base[0]:
+                        time.sleep(0.25)  # let it settle (a menu finishing opening)
+                        return "changed"
+            time.sleep(0.12)
+        return "timeout"
 
     def _dock_icon(self, name: str) -> Rect | None:
         try:

@@ -9,6 +9,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import time
 import uuid
@@ -59,6 +60,7 @@ class Services:
         self.audit = AuditLog(self.db)
         self.permissions = Permissions(self.db)
         self.broker = ConfirmationBroker()
+        self.turns: set = set()  # (task, TurnState) of every answer being worked on, so Stop can end them all
         self.identity = Identity(cfg.tls_dir)
         self.pairing = Pairing(self.db, self.identity, self.audit)
         self.link = PcLink(cfg, self.db, self.audit, self.identity)
@@ -196,6 +198,42 @@ async def consolidation_loop(s: Services) -> None:
                 log.exception("consolidation failed")
 
 
+_STOP_RE = re.compile(r"^(?:ok(?:ay)?[, ]+)?(?:stop|stop it|stop that|stop everything|cancel|cancel it|cancel that|"
+                      r"never ?mind|halt|enough|that'?s enough|quit it|shut up|be quiet|hush)(?: please)?[.!]*$", re.I)
+
+
+def _lesson_cmd(text: str) -> str | None:
+    t = re.sub(r"[^a-z ]", "", text.lower()).strip()
+    t = re.sub(r"^(?:ok(?:ay)?|alright|clicky)\s+", "", t)
+    if re.fullmatch(r"(?:next|next step|done|got it|i did it|did it|ok next|continue|keep going|move on|whats next)"
+                    r"(?: please)?", t):
+        return "next"
+    if re.fullmatch(r"(?:back|go back|previous|previous step)(?: please)?", t):
+        return "back"
+    if re.fullmatch(r"(?:repeat|repeat that|again|say that again|show me again)(?: please)?", t):
+        return "repeat"
+    if re.fullmatch(r"(?:stop the lesson|end the lesson|quit the lesson|exit)", t):
+        return "stop"
+    return None
+
+
+async def stop_all_turns(s, tell_pc: bool = True) -> None:
+    """Stop means stop: every answer being written, every task and lesson, on the computer too."""
+    turns = list(getattr(s, "turns", set()))
+    for _task, st in turns:
+        st.cancel.set()
+    s.broker.deny_all()
+    if tell_pc and s.link.connected:
+        try:
+            await s.link.send_event("system", "stop_all", {})
+        except Exception:  # noqa: BLE001
+            pass
+    await asyncio.sleep(0.3)  # let a streaming answer end politely, then cut whatever is still running
+    for task, _st in turns:
+        if not task.done():
+            task.cancel()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global services
@@ -250,6 +288,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(store())
 
     s.link.event_handlers["system.seen"] = on_seen
+    # "stop" said or typed on the computer (Ask box, voice): stop every answer and task here too
+    s.link.event_handlers["system.stop"] = lambda payload: asyncio.ensure_future(stop_all_turns(s, tell_pc=False))
 
     def on_activity(payload):
         """The companion brain's minute-by-minute note: which app/window and for how long (learned over time)."""
@@ -710,10 +750,37 @@ async def chat_ws(ws: WebSocket):
         while True:
             msg = json.loads(await ws.receive_text())
             kind = msg.get("type")
-            if kind == "send":
-                if turn_task and not turn_task.done():
-                    await send({"type": "error", "message": "Still answering. Press Stop first."})
-                    continue
+            if kind == "send" or kind == "command":
+                text_in = str(msg.get("text", ""))[:20000]
+                running = bool(turn_task and not turn_task.done())
+                if running or kind == "command":
+                    if _STOP_RE.match(text_in.strip()):
+                        await stop_all_turns(s)  # "stop" / "cancel" / "never mind" while it's working
+                        continue
+                    cmd = _lesson_cmd(text_in) if s.orchestrator.lesson_active else None
+                    if cmd:
+                        await s.link.send_event("system", "lesson_cmd", {"cmd": cmd})
+                        if cmd == "stop":
+                            await stop_all_turns(s)
+                        continue
+                    if s.orchestrator.lesson_active:
+                        # a question in the middle of a lesson: answer it alongside (the lesson keeps going)
+                        async def side(m=msg, t=text_in):
+                            async def side_send(ev):
+                                if ev.get("type") in ("done", "conversation", "status"):
+                                    return
+                                await send(ev)
+                            await side_send({"type": "token", "text": "\n\n"})
+                            st = TurnState()
+                            st.brief = True
+                            await s.orchestrator.handle(send=side_send, text=t, conversation_id=m.get("conversation_id"),
+                                                        upload_ids=[], incognito_key=None, state=st)
+                            await side_send({"type": "token", "text": "\n\n"})
+                        asyncio.create_task(side())
+                        continue
+                    if running:
+                        await send({"type": "error", "message": "Still working on the last one. Press Stop first."})
+                        continue
                 state = TurnState()
                 state.brief = bool(msg.get("brief"))  # the small Ask box: short answers
                 incog = incognito_key if msg.get("incognito") else None
@@ -725,12 +792,18 @@ async def chat_ws(ws: WebSocket):
                             conversation_id=m.get("conversation_id"),
                             upload_ids=[int(u) for u in m.get("uploads", [])][:10],
                             incognito_key=ik, state=st)
+                    except asyncio.CancelledError:
+                        await send({"type": "done", "source": "", "model": "", "stopped": True})
                     except Exception as exc:  # noqa: BLE001
                         log.exception("turn failed")
                         await send({"type": "error", "message": f"Something went wrong: {exc}"})
                         await send({"type": "done", "source": "", "model": ""})
+                    finally:
+                        s.turns.discard(entry)
 
                 turn_task = asyncio.create_task(run_turn())
+                entry = (turn_task, state)
+                s.turns.add(entry)
             elif kind == "typing":
                 if not (turn_task and not turn_task.done()):
                     partial = str(msg.get("text", ""))[:2000]
@@ -740,9 +813,7 @@ async def chat_ws(ws: WebSocket):
                     if not s.orchestrator.fast and not s.orchestrator._speculable(partial):
                         asyncio.create_task(s.orchestrator.prewarm(conv_id, partial))
             elif kind == "stop":
-                if state:
-                    state.cancel.set()
-                s.broker.deny_all()
+                await stop_all_turns(s)
             elif kind == "confirm":
                 s.broker.resolve(str(msg.get("id")), str(msg.get("decision")))
             elif kind == "cancel_image":

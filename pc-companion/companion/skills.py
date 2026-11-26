@@ -14,6 +14,7 @@ import asyncio
 import logging
 import re
 import subprocess
+import time
 import sys
 
 log = logging.getLogger("click.skills")
@@ -845,28 +846,79 @@ end run""", step.get("text", ""), *parts)
         return "emptied the Trash"
 
     async def play_music(self, step: dict) -> str:
+        """Play exactly what was asked for (see music.py): that song, only that artist, that album..."""
         if sys.platform != "darwin":
             raise SkillError("Playing music is Mac-only for now.")
-        q = _as_text(step["query"])
-        await self._point("Music", f"Finding “{step['query']}”", fallback_center=True)
-        script = f'''
-            tell application "Music"
-                activate
-                set found to (search library playlist 1 for "{q}" only songs)
-                if found is {{}} then return "NOTFOUND"
-                play item 1 of found
-                return (name of item 1 of found) & " by " & (artist of item 1 of found)
-            end tell'''
-        res = await asyncio.to_thread(_osascript, script)
-        if res == "NOTFOUND":
-            import urllib.parse
+        from . import music
 
-            url = "music://music.apple.com/search?term=" + urllib.parse.quote(step["query"])
-            await asyncio.to_thread(subprocess.run, ["open", url])
-            self.app.bridge.narrate.emit(f"“{step['query']}” isn't in your library. I opened Apple Music search.")
-            return "not in the library; opened Apple Music search for it"
-        self.app.bridge.narrate.emit(f"Playing {res}")
-        return f"playing {res}"
+        req = {k: step[k] for k in ("kind", "song", "artist", "album", "playlist", "name", "hint", "shuffle")
+               if step.get(k)}
+        if not req:
+            req = {"kind": "any", "name": step["query"]}
+        self.app.bridge.narrate.emit(f"Finding \u201c{step['query']}\u201d")
+        idx = music._index
+        if time.time() - idx.get("at", 0) > 600:  # read the library at most every 10 minutes
+            try:
+                raw = await self._script(music.INDEX_SCRIPT, timeout=60)
+                idx = music._index = music.parse_index(raw)
+            except SkillError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.warning("couldn't read the Music library: %s", exc)
+                idx = {"tracks": [], "playlists": []}
+        pick = music.choose(req, idx)
+        if pick["how"] != "catalog":
+            shuffle = "1" if (req.get("shuffle") or pick["how"] in ("artist", "genre", "favorites")) else "0"
+            res = await self._script(music.PLAY_SCRIPT, pick["how"], pick.get("value") or "", pick.get("artist") or "",
+                                     shuffle)
+            if res != "NOTFOUND":
+                what = {"song": res, "artist": f"songs by {pick.get('value')} (shuffled)",
+                        "album": f"the album {pick.get('value')}", "playlist": f"your playlist {res}",
+                        "genre": f"{pick.get('value')} music", "favorites": "your favorite songs",
+                        "library": "your music, shuffled"}.get(pick["how"], res)
+                self.app.bridge.narrate.emit(f"Playing {what}")
+                return f"playing {what}"
+        # not in the library: find it in Apple Music and open it there
+        found = await asyncio.to_thread(music.catalog_search, pick.get("term") or step["query"],
+                                        pick.get("entity", "song"), pick.get("want", ""), pick.get("by", ""))
+        if found and found["url"]:
+            await asyncio.to_thread(subprocess.run, ["open", found["url"]])
+            pressed = await self._press_play_in_music()
+            label = found["name"] + (f" by {found['by']}" if found.get("by") else "")
+            if pressed:
+                self.app.bridge.narrate.emit(f"Playing {label} from Apple Music")
+                return f"{label} wasn't in the library, so it's playing from Apple Music"
+            await self._point("Play", f"{label} is open in Apple Music: press Play", fallback_center=False)
+            return f"{label} isn't in the library; opened it in Apple Music (press Play there)"
+        import urllib.parse
+
+        url = "music://music.apple.com/search?term=" + urllib.parse.quote(step["query"])
+        await asyncio.to_thread(subprocess.run, ["open", url])
+        self.app.bridge.narrate.emit(f"Couldn't find \u201c{step['query']}\u201d in your library. I searched Apple Music.")
+        return "not in the library; opened Apple Music search for it"
+
+    async def _press_play_in_music(self) -> bool:
+        """After opening a song, album or artist page in Apple Music, press its Play button (Accessibility)."""
+        script = r'''
+tell application "System Events"
+    tell process "Music"
+        repeat 8 times
+            try
+                set bs to (every button of entire contents of front window whose description is "Play" or name is "Play")
+                if bs is not {} then
+                    click item 1 of bs
+                    return "ok"
+                end if
+            end try
+            delay 0.5
+        end repeat
+    end tell
+end tell
+return "no"'''
+        try:
+            return (await self._script(script, timeout=20)) == "ok"
+        except Exception:  # noqa: BLE001
+            return False
 
     async def new_note(self, step: dict) -> str:
         """A new note in Apple Notes with an optional title and text. The words are handed to Notes as

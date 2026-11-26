@@ -85,6 +85,11 @@ class Platform:
         """App icons in the Dock / taskbar."""
         return []
 
+    def screen_signature(self):
+        """A cheap fingerprint of what's on screen (front app and window, windows and menus open, typing).
+        It changes when the user does something (opens a menu, a window appears...). None if unsupported."""
+        return None
+
     def app_menus(self) -> list[Element]:
         """The front app's own menus (File, Edit, View...) plus the items of any menu that's open right now."""
         return []
