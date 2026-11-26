@@ -4,11 +4,13 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 from typing import Awaitable, Callable
 
 import httpx
 
 
+log = logging.getLogger("click.inference")
 KEEP_ALIVE = "24h"  # keep the model loaded all day: reloading it after a break costs many seconds
 def _physical_cores() -> int:
     """The AI engine runs fastest with one thread per REAL core. Intel chips report twice as many
@@ -92,11 +94,58 @@ class Inference:
         try:
             async with httpx.AsyncClient(timeout=300) as c:
                 await c.post(f"{self.url}/api/generate", json={"model": self.models["chat"], "keep_alive": KEEP_ALIVE})
+                await self.refresh_installed()
+                smart = self.smart_model()
+                if smart:  # keep the smart model ready too (both fit easily in memory)
+                    await c.post(f"{self.url}/api/generate", json={"model": smart, "keep_alive": KEEP_ALIVE})
         except Exception:  # noqa: BLE001 - Ollama not running yet; the first question will load it
             pass
 
+    def smart_model(self) -> str | None:
+        """The smart model, if Smart mode is on and it's downloaded (else None: the fast model answers)."""
+        smart = self.models.get("smart")
+        if not smart or smart == self.models["chat"] or not self.settings.get("smart_mode", True):
+            return None
+        return smart if smart in getattr(self, "_installed", set()) or \
+            smart.removesuffix(":latest") in getattr(self, "_installed", set()) else None
+
+    async def refresh_installed(self) -> None:
+        try:
+            self._installed = set(await self.installed_models())
+        except Exception:  # noqa: BLE001
+            pass
+
+    def download_smart(self, progress=lambda pct: None) -> bool:
+        """Get the smart model once (about 4.7 GB), quietly in the background. Blocking: run in a thread."""
+        smart = self.models.get("smart")
+        if not smart or smart == self.models["chat"]:
+            return False
+        import httpx as _h
+
+        try:
+            with _h.stream("POST", f"{self.url}/api/pull", json={"model": smart, "stream": True},
+                           timeout=_h.Timeout(3600, connect=10)) as r:
+                last = -1
+                for line in r.iter_lines():
+                    if not line.strip():
+                        continue
+                    d = json.loads(line)
+                    if d.get("total") and d.get("completed"):
+                        pct = int(d["completed"] * 100 / d["total"])
+                        if pct != last and d["total"] > 100_000_000:
+                            last = pct
+                            progress(pct)
+                    if d.get("status") == "success":
+                        self._installed = set(getattr(self, "_installed", set())) | {smart}
+                        return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("couldn't download the smart model: %s", exc)
+        return False
+
     async def chat(self, payload: dict, emit: Callable[[dict], Awaitable[None]]) -> dict:
-        model = self.models["vision"] if payload.get("role") == "vision" else self.models["chat"]
+        role = payload.get("role")
+        model = self.models["vision"] if role == "vision" else (
+            (self.smart_model() or self.models["chat"]) if role == "smart" else self.models["chat"])
         body = {"model": model, "messages": payload.get("messages", []), "stream": True, "keep_alive": KEEP_ALIVE,
                 "options": {"num_ctx": self.num_ctx, "num_thread": THREADS, **(payload.get("options") or {})}}
         if payload.get("tools"):

@@ -482,6 +482,7 @@ def test_lesson_for_any_app_picks_only_from_what_is_on_screen(services, monkeypa
     mac = FakeMac(screens, "desk", {"open:Blender": "viewport", "viewport:Add": "addmenu", "addmenu:Mesh": "mesh",
                                     "mesh:Cube": "cube"})
     calls = _mac(services, mac)
+    # Blender doesn't list its buttons (only words read off the screen): taught step by step from what's visible
     answers = [{"say": "Click Add at the top.", "kind": "click", "target": "Add"},
                {"say": "Choose Mesh.", "kind": "click", "target": "Mesh"},
                {"say": "Now click Cube.", "kind": "click", "target": "Cube"},
@@ -826,3 +827,48 @@ def test_stop_words_and_lesson_commands():
         assert not _STOP_RE.match(t), t
     assert _lesson_cmd("next") == "next" and _lesson_cmd("ok I did it") == "next" and _lesson_cmd("go back") == "back"
     assert _lesson_cmd("where is the save button") is None
+
+
+def test_planned_menu_commands_are_followed_through_real_menus():
+    from app.tutor import resolve_target
+
+    bar = [{"id": "f", "name": "File", "role": "MenuBarItem", "items": ["New", "Export > Export as MP3"]},
+           {"id": "p", "name": "Path", "role": "MenuBarItem", "items": ["Union", "Combine"]},
+           {"id": "b", "name": "Start Recording", "role": "Button"}]
+    r = resolve_target("File > Export > Export as MP3", bar)
+    assert r["control"]["id"] == "f" and not r["final"] and "Export as MP3" in r["say"]
+    opened = bar + [{"id": "e", "name": "Export", "role": "MenuItem"}]
+    r = resolve_target("File > Export > Export as MP3", opened)
+    assert r["control"]["id"] == "e" and "Point to Export" in r["say"]  # the submenu
+    sub = opened + [{"id": "m", "name": "Export as MP3", "role": "MenuItem"}]
+    assert resolve_target("File > Export > Export as MP3", sub) == {"control": sub[-1], "final": True, "say": ""}
+    # the plan named the wrong menu: the menu that really has it is used
+    assert resolve_target("Object > Path > Combine", bar)["control"]["id"] == "p"
+    assert resolve_target("Start Recording", bar)["control"]["id"] == "b"
+    assert resolve_target("Settings window > Recording folder", bar) is None  # made up: never pointed at
+
+
+def test_lesson_in_an_unfamiliar_app_is_planned_from_its_real_menus(services):
+    import json as _json
+
+    bar = [{"name": "File", "role": "MenuBarItem", "items": ["New", "Export > Export as MP3", "Export > Export as WAV"]},
+           {"name": "Effect", "role": "MenuBarItem", "items": ["Fade In", "Fade Out"]}]
+    screens = {"main": bar, "file": bar + [{"name": "New", "role": "MenuItem"}, {"name": "Export", "role": "MenuItem"}],
+               "export": bar + [{"name": "Export", "role": "MenuItem"}, {"name": "Export as MP3", "role": "MenuItem"},
+                                {"name": "Export as WAV", "role": "MenuItem"}], "saved": bar}
+    mac = FakeMac(screens, "main", {"main:File": "file", "file:Export": "export", "export:Export as MP3": "saved"},
+                  front="Audacity")
+    calls = _mac(services, mac)
+    plan = {"steps": [{"target": "File > Export > Export as MP3", "say": "Click File, then Export, then Export as MP3."},
+                      {"target": "", "say": "Type a name for the file, then click Save."}]}
+    services.pc_backend = FakeBackend([[{"type": "token", "text": _json.dumps(plan)}]])
+    out = run(services.orchestrator.handle(send=Recorder(), text="teach me how to export as mp3 in audacity",
+                                           conversation_id=None, upload_ids=[], incognito_key=None, state=_state()))
+    plan_call = services.pc_backend.calls[0]
+    assert plan_call["role"] == "smart" and "File > Export > Export as MP3" in plan_call["messages"][-1]["content"]
+    pointed = [s.get("element_id") for s in mac.shown if s.get("element_id")]
+    assert pointed == ["main:File", "file:Export", "export:Export as MP3"]  # menu, submenu, command
+    assert mac.shown[-1]["kind"] == "type"  # then waits for them to type the name
+    assert len(services.pc_backend.calls) == 1  # planned once; every step after that was instant
+    assert "you did it" in out["answer"]
+    assert not any(c[:2] in (("cursor", "click"), ("skills", "run")) for c in calls)

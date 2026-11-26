@@ -182,3 +182,25 @@ def test_explain_only_steps_carry_on_after_reading_time():
     t0 = __import__("time").time()
     res = asyncio.run(t._wait({"kind": "look", "say": "Look at the panel.", "timeout": 30}, None, None, app.lesson))
     assert res["result"] == "next" and __import__("time").time() - t0 < 6
+
+
+def test_smart_mode_uses_the_bigger_model_only_when_it_is_here():
+    from companion.hardware import pick_models
+    from companion.inference import Inference
+
+    class S(dict):
+        def __getitem__(self, k):
+            return dict.get(self, k, {})
+
+    info = {"tier": "intel_mac", "device": "cpu", "ram_gb": 32, "vram_gb": 0}
+    models = pick_models(info, S(models={}, image={"enabled": None}))
+    assert models["chat"] == "qwen2.5:1.5b" and models["smart"] == "qwen2.5:7b"
+    small = pick_models({**info, "ram_gb": 8}, S(models={}, image={"enabled": None}))
+    assert small["smart"] == small["chat"]  # not enough memory: no big model
+    settings = S(ollama_url="http://127.0.0.1:1")
+    inf = Inference(settings, models)
+    assert inf.smart_model() is None  # not downloaded yet: the fast model answers meanwhile
+    inf._installed = {"qwen2.5:7b", "qwen2.5:1.5b"}
+    assert inf.smart_model() == "qwen2.5:7b"
+    settings["smart_mode"] = False
+    assert inf.smart_model() is None  # switched off in the menu bar

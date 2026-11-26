@@ -285,9 +285,35 @@ class App:
         box.exec()
 
     def _warm(self) -> None:
-        """Load the AI model into memory now, so the first question doesn't wait for it."""
+        """Load the AI model into memory now, so the first question doesn't wait for it. If Smart mode's
+        bigger model isn't here yet, fetch it quietly in the background (Click works normally meanwhile)."""
         if self.server.loop:
-            asyncio.run_coroutine_threadsafe(self.inference.warm_up(), self.server.loop)
+            fut = asyncio.run_coroutine_threadsafe(self.inference.warm_up(), self.server.loop)
+            fut.add_done_callback(lambda _f: self._maybe_get_smart())
+
+    def _maybe_get_smart(self) -> None:
+        inf = self.inference
+        smart = self.models.get("smart")
+        if self.selftest or not smart or smart == self.models["chat"] or not self.settings.get("smart_mode", True) \
+                or inf.smart_model() or getattr(self, "_smart_downloading", False):
+            return
+        self._smart_downloading = True
+
+        def work():
+            shown = {"pct": -10}
+
+            def progress(pct):
+                if pct >= shown["pct"] + 10:  # an occasional, quiet note
+                    shown["pct"] = pct
+                    self.bridge.voiceStatus.emit(f"Getting Smart mode ready in the background… {pct}%")
+            ok = inf.download_smart(progress)
+            self._smart_downloading = False
+            if ok:
+                self.bridge.voiceStatus.emit("Smart mode is ready: Clicky now understands you better.")
+                if self.server.loop:
+                    asyncio.run_coroutine_threadsafe(inf.warm_up(), self.server.loop)
+
+        threading.Thread(target=work, name="click-smart-download", daemon=True).start()
 
     def _onboard(self) -> None:
         """First launch: a short guided welcome; setup runs in the background meanwhile."""
@@ -644,7 +670,8 @@ class App:
     async def capabilities(self) -> dict:
         return {
             "protocol": 1, "pc_name": self.settings["pc_name"], **self.hardware,
-            "models": {"chat": self.models["chat"], "vision": self.models["vision"]},
+            "models": {"chat": self.models["chat"], "vision": self.models["vision"],
+                       "smart": self.inference.smart_model() or ""},
             "vision_in_chat": self.inference.vision_in_chat,
             # On processor-only computers a screenshot costs many seconds to read; the OCR text is enough.
             "cpu_only": self.hardware.get("device") == "cpu",

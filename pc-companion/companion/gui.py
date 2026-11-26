@@ -955,6 +955,16 @@ class Tray(QObject):
         self.speak_action.setChecked(bool(app_ctl.settings.get("speak_answers", False)))
         self.speak_action.toggled.connect(lambda on: app_ctl.settings.set("speak_answers", bool(on)))
         menu.addAction(self.speak_action)
+        self.smart_action = QAction("Smart mode (understands more, answers a bit slower)")
+        self.smart_action.setCheckable(True)
+        self.smart_action.setChecked(bool(app_ctl.settings.get("smart_mode", True)))
+
+        def set_smart(on):
+            app_ctl.settings.set("smart_mode", bool(on))
+            if on:
+                app_ctl._maybe_get_smart()
+        self.smart_action.toggled.connect(set_smart)
+        menu.addAction(self.smart_action)
         welcome = QAction("Show the welcome again")
         welcome.triggered.connect(lambda: (app_ctl.settings.set("welcome_version", ""), app_ctl._onboard()))
         menu.addAction(welcome)

@@ -579,8 +579,14 @@ class Orchestrator:
             reference = asyncio.create_task(self._lesson_reference(title, None))
         await send({"type": "tool", "name": "click", "status": "running", "caption": f"{title}: follow Clicky"})
         self.lesson_active = True
-        lesson = Lesson(title, goal, steps, deps.link, deps.pc_backend.chat_stream, send,
-                        installed=deps.db.get_setting("installed_apps", []) or [], reference_task=reference)
+        backend = deps.pc_backend
+
+        def smart_chat(msgs, tools=None, **kw):  # the bigger model (if this computer has it) plans the lesson
+            return backend.chat_stream(msgs, tools, role="smart", **kw)
+
+        lesson = Lesson(title, goal, steps, deps.link, backend.chat_stream, send,
+                        installed=deps.db.get_setting("installed_apps", []) or [], reference_task=reference,
+                        smart_chat=smart_chat)
         try:
             written = await lesson.run()
         except PcError as exc:
@@ -903,7 +909,7 @@ class Orchestrator:
                  + language.rewrite(text)}]
         out = []
         try:
-            async for ev in self.deps.pc_backend.chat_stream(msgs, None, fmt=language.PLAN_SCHEMA,
+            async for ev in self.deps.pc_backend.chat_stream(msgs, None, fmt=language.PLAN_SCHEMA, role="smart",
                                                              options={"num_predict": 200, "temperature": 0}):
                 if ev["type"] == "token":
                     out.append(ev["text"])
@@ -1050,7 +1056,7 @@ class Orchestrator:
         out: list[str] = []
         last_sent = 0.0
         opts = {"num_predict": room if sp.get("brief") else 220} if self.fast else ({"num_predict": room} if sp.get("brief") else {})
-        async for ev in deps.pc_backend.chat_stream(messages, None, options=opts):
+        async for ev in deps.pc_backend.chat_stream(messages, None, options=opts, role="smart"):
             if ev["type"] == "token":
                 out.append(ev["text"])
                 sp["answer"] = "".join(out)
@@ -1088,7 +1094,7 @@ class Orchestrator:
             msgs = [{"role": "system", "content": self._system_prompt("pc", bool(tools))}]
             msgs += self._history(conversation_id, None)
             msgs.append({"role": "user", "content": partial})
-            async for _ in deps.pc_backend.chat_stream(msgs, tools or None, options={"num_predict": 1}):
+            async for _ in deps.pc_backend.chat_stream(msgs, tools or None, options={"num_predict": 1}, role="smart"):
                 pass
         except Exception:  # noqa: BLE001 - only an optimisation
             pass
@@ -1146,7 +1152,7 @@ class Orchestrator:
         for _round in range(max_rounds + 1):
             round_text, calls = [], []
             try:
-                async for ev in backend.chat_stream(messages, tools or None, options=options):
+                async for ev in backend.chat_stream(messages, tools or None, options=options, role="smart"):
                     if state.cancel.is_set():
                         break
                     if ev["type"] == "token":

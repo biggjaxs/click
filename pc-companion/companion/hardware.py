@@ -96,8 +96,16 @@ def pick_models(info: dict, settings) -> dict:
     if info["device"] == "cuda" and info["vram_gb"] < 7.5:
         enabled = image["enabled"] if image["enabled"] is not None else True
         tier = {**tier, "draft": "stabilityai/sd-turbo", "quality": "stabilityai/sd-turbo"}
+    chat = models.get("chat") or tier["chat"]
+    # Smart mode: a bigger model for conversation, explanations and planning lessons. On Intel Macs with
+    # plenty of memory that's a 7B text model (much better at understanding how people talk); the fast small
+    # model still does quick commands and each lesson step. Elsewhere the chat model is already capable.
+    smart = models.get("smart") or (tier.get("smart") or chat)
+    if info.get("tier") == "intel_mac" and not models.get("smart"):
+        smart = "qwen2.5:7b" if (info.get("ram_gb") or 0) >= 15 else chat
     return {
-        "chat": models.get("chat") or tier["chat"],
+        "chat": chat,
+        "smart": smart,
         "vision": models.get("vision") or tier["vision"],
         "image_enabled": bool(enabled),
         "image_draft": image.get("draft_model") or tier["draft"],
