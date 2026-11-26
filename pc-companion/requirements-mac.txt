@@ -3,3 +3,4 @@ pyobjc-framework-Cocoa>=10.0               # MIT
 pyobjc-framework-Quartz>=10.0              # MIT
 pyobjc-framework-ApplicationServices>=10.0 # MIT
 pyobjc-framework-Vision>=10.0               # MIT (fast on-device text recognition)
+pyobjc-framework-AVFoundation>=10.0         # MIT (microphone, for talking to Clicky)

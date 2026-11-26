@@ -206,6 +206,31 @@ def _locate_one(where: str, g: MacGeometry) -> tuple[Rect, str] | None:
     return None
 
 
+# what macOS calls these menu bar icons (so Clicky can use their EXACT position when it can see them)
+AX_ALIASES = {
+    "wi-fi": [r"wi-?fi", r"wireless", r"airport"], "battery": [r"battery"], "control center": [r"control cent"],
+    "spotlight": [r"spotlight", r"^search$"], "clock": [r"\d{1,2}:\d{2}", r"clock"],
+    "notification center": [r"\d{1,2}:\d{2}", r"clock", r"notification"], "bluetooth": [r"bluetooth"],
+    "sound": [r"sound", r"volume"], "focus": [r"focus", r"do not disturb"], "airdrop": [r"airdrop"],
+    "siri": [r"siri"], "apple menu": [r"^apple$"], "screen mirroring": [r"screen mirroring"],
+    "brightness": [r"display", r"brightness"],
+}
+
+
+def exact_menu_item(key: str, items: list) -> "Element | None":
+    """The real menu bar icon for a landmark (exact position from macOS), if it's there."""
+    import re as _re
+
+    pats = AX_ALIASES.get(key)
+    if not pats:
+        return None
+    for el in items:
+        n = (el.name or "").lower().replace("\u2011", "-")
+        if any(_re.search(p, n) for p in pats):
+            return el
+    return None
+
+
 def dock_app(query: str, g: MacGeometry) -> Element | None:
     """Any app in the Dock (pinned or running), found from the Dock's own settings: no permission needed."""
     q = _clean(query).removesuffix(" app").strip()
@@ -233,6 +258,7 @@ def locate(query: str, g: MacGeometry) -> Element | None:
             rect, area = hit
             el = Element(name=key.title() if key != "wi-fi" else "Wi‑Fi", role="Landmark", rect=rect,
                          window_title=area)
+            el.extra["key"] = key
             el.extra["note"] = say
             el.extra["from_map"] = True
             if g.dock_thickness <= 4 and area == "Dock":

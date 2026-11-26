@@ -161,6 +161,8 @@ class App:
 
         self.recorder = Recorder(self)
         self.library = Library(self.settings.dir)
+        if not self.selftest and sys.platform == "darwin":
+            self.screen.start_index()  # keep an up-to-date list of the Dock and menu bar items
         from .screenmem import ScreenMemory
 
         self.screen_memory = ScreenMemory(self)
@@ -499,6 +501,14 @@ class App:
         try:
             st = httpx.get(f"{self.tile.url}/api/status", timeout=2).json()
             if st["pc"]["connected"]:
+                if sys.platform == "darwin":  # everything voice needs must be inside the app
+                    try:
+                        import AVFoundation  # noqa: F401
+                        from .voice import engine_path
+
+                        print("SELFTEST VOICE", "OK" if engine_path() else "NO ENGINE", flush=True)
+                    except Exception as exc:  # noqa: BLE001
+                        print("SELFTEST VOICE FAILED", exc, flush=True)
                 print("SELFTEST OK", st["pc"]["pc_name"], flush=True)
                 if "--ui" in sys.argv:
                     self._selftest_ui()
@@ -944,6 +954,44 @@ class App:
                 self.notify(f"Imported {n} skill{'s' if n != 1 else ''}. Say “show me how to …” or “do …” to use them.")
             except Exception as exc:  # noqa: BLE001
                 self.notify(f"Couldn't import that file: {exc}")
+
+    async def system_state(self, p):
+        """What's going on right now (so "stop it", "cancel that", "how long is left" make sense)."""
+        import time as _t
+
+        st = {"paused": bool(self.paused)}
+        f = getattr(self, "focus", None)
+        if f is not None and f.active:
+            st["focus"] = {"active": True, "minutes_left": f.minutes_left(),
+                           "minutes_total": int((f.until - f.started) // 60)}
+        if getattr(self, "recorder", None) is not None and self.recorder.recording:
+            st["recording"] = self.recorder.name
+        if getattr(self, "lesson", {}).get("active"):
+            st["lesson"] = {"title": self.lesson.get("title"), "step": self.lesson.get("step"),
+                            "total": self.lesson.get("total")}
+        try:
+            w = await asyncio.to_thread(self.platform.active_window)
+            if w and w.app not in ("Click", "Python"):
+                from .safety import is_blocked
+
+                st["front"] = {"app": w.app, "title": "" if is_blocked(w.title, w.app, self.settings["blocklist"])
+                               else (w.title or "")[:120]}
+        except Exception:  # noqa: BLE001
+            pass
+        if sys.platform == "darwin":
+            try:
+                r = await asyncio.wait_for(asyncio.to_thread(
+                    __import__("subprocess").run, ["osascript", "-e",
+                                                   'if application "Music" is running then tell application "Music" '
+                                                   'to return (player state as text) & "|" & (name of current track)'],
+                    capture_output=True, text=True, timeout=3), 4)
+                state, _, track = r.stdout.strip().partition("|")
+                if state == "playing":
+                    st["music"] = {"playing": True, "track": track[:80]}
+            except Exception:  # noqa: BLE001
+                pass
+        st["at"] = _t.time()
+        return st
 
     async def skills_briefing(self, p):
         return await self.skills.briefing(p)

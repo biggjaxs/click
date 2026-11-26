@@ -146,6 +146,7 @@ jobs:
           run
           test "$(grep -c 'SELFTEST OK' selftest.log)" -ge 2
           grep -q "SELFTEST UI OK" selftest.log || echo "::warning::chat page didn't display in the headless test"
+          grep -q "SELFTEST VOICE OK" selftest.log || { echo "::error::voice isn't fully inside the app"; grep VOICE selftest.log; exit 1; }
           file dist/Click.app/Contents/MacOS/Click
 
       - name: Make the .dmg

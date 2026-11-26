@@ -267,3 +267,30 @@ def test_screen_layout_says_where_things_are():
                       Window(1, "Inbox", "Mail", Rect(0, 0, 1440, 900)))
     assert "[top-left] Inbox" in out and "[middle] Hello Sam" in out
     assert "New Message (button, top-left)" in out and "Send (button, top-right)" in out and "Dock: Mail" in out
+
+
+def test_menu_bar_icons_use_the_exact_position_when_macos_shows_them(monkeypatch):
+    from companion.platforms import Element, Platform, Rect
+    from companion.screen import ScreenService
+
+    real_wifi = Element("Wi‑Fi, connected, 3 bars", "MenuBarItem", Rect(1187, 0, 30, 24), window_title="Menu bar")
+    clock = Element("Wed Nov 26  3:41 PM", "MenuBarItem", Rect(1290, 0, 140, 24), window_title="Menu bar")
+
+    class P(Platform):
+        def menu_bar_items(self):
+            return [real_wifi, clock]
+
+        def dock_items(self):
+            return []
+
+        def list_windows(self):
+            return []
+
+    svc = ScreenService(P(), {"blocklist": []})
+    svc.geometry_fn = _mac
+    monkeypatch.setattr(svc, "_find_by_text", lambda q: [])
+    for q, rect in (("wifi", real_wifi.rect), ("where's the wi-fi icon", None), ("clock", clock.rect)):
+        out = svc.find_ui_element(q)
+        if rect:
+            assert out["matches"][0]["rect"] == rect.as_list(), q
+            assert out["found_by"] in ("menu bar (exact)", "accessibility")

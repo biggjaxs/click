@@ -172,6 +172,8 @@ def describe(step: dict) -> str:
     if k == "fill_form":
         return "Fill in this form from your Contacts card (you check it and press Submit)"
     if k == "focus":
+        if step.get("action") == "extend":
+            return f"Add {step.get('minutes')} minutes to focus time"
         return "Stop focus time" if step.get("action") == "stop" else f"Focus for {step.get('minutes', 25)} minutes"
     if k == "empty_trash":
         return "Empty the Trash (can't be undone)"
@@ -814,6 +816,8 @@ end run""", step.get("text", ""), *parts)
             f = self.app.focus = Focus(self.app)
         if step.get("action") == "stop":
             return f.stop()
+        if step.get("action") == "extend":
+            return f.extend(int(step.get("minutes") or 10))
         return f.start(int(step.get("minutes") or 25))
 
     async def keys(self, step: dict) -> str:

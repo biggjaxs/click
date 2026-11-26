@@ -25,6 +25,7 @@ hiddenimports = (
     ["app.main", "click_protocol", "click_protocol.tls"]
     + collect_submodules("app")
     + collect_submodules("companion")
+    + (["AVFoundation", "Foundation", "Quartz"] if sys.platform == "darwin" else [])  # microphone + CGEvent
     + collect_submodules("uvicorn")
     + collect_submodules("websockets")
     + collect_submodules("zeroconf")

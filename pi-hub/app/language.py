@@ -31,17 +31,22 @@ class DialogState:
     last_text: str = ""
     last_plan: list = field(default_factory=list)
     last_summary: str = ""
+    live: dict = field(default_factory=dict)  # what's going on right now (focus timer, recording, music...)
+    nothing_running: bool = False             # they said "stop it" but nothing is running
 
 
 # ---- 1. rewrite -----------------------------------------------------------------------------------------------
 _POLITE_LEAD = re.compile(
-    r"^(?:(?:hey|hi|ok|okay|yo|so|um+|uh+|alright|right|now|and|also|then)\b[,!\s]*|"
-    r"(?:can|could|would|will|won't|wont)\s+you\s+(?:please\s+)?(?:go ahead and\s+|just\s+)?|"
+    r"^(?:(?:hey|hi|ok|okay|yo|so|um+|uh+|alright|right|now|and|also|then|actually|wait|oh|oops|sorry|hmm+|"
+    r"no|nah|instead)\b[,!\s]*|"
+    r"(?:can|could|would|will|won't|wont|can't|cant)\s+(?:you|u|ya|yall|y'all)\s+(?:please\s+|pls\s+|plz\s+)?"
+    r"(?:go ahead and\s+|just\s+|maybe\s+)?|"
     r"(?:please|pls|plz|kindly|just|quickly|go ahead and|let's|lets)\s+|"
     r"i(?:'d| would)? (?:like|love|want|need) (?:you )?to\s+|i want you to\s+|i need you to\s+|"
     r"(?:help me|try to|try and|be able to|i'd like to|i wanna|i want to|i need to)\s+|"
     r"(?:click|clicky)[,!:\s]+)+", re.I)
-_POLITE_TAIL = re.compile(r"(?:[,\s]+(?:for me|please|pls|thanks|thank you|right now|now|real quick|quickly|"
+_POLITE_TAIL = re.compile(r"(?:[,\s]+(?:for me|please|pls|plz|thanks|thank you|thx|ty|right now|now|real quick|quickly|"
+                          r"a bit|a little(?: bit)?|a tad|asap|rn|"
                           r"if you can|if you could|on my (?:mac|computer|laptop|screen)|okay|ok))+[\s?.!]*$", re.I)
 
 
@@ -188,17 +193,76 @@ def _content(x: str, now) -> dict:
     return {"text": _expand(x, now)}
 
 
+_STOP_VERB = (r"(?:stop|end|cancel|turn\s+off|switch\s+off|kill|quit|finish|exit|shut\s+off|get\s+rid\s+of|"
+              r"disable|close|pause|halt)")
+_FOCUS_WORDS = r"(?:(?:the\s+|my\s+|this\s+|that\s+)?(?:focus(?:\s+(?:timer|mode|time|session))?|timer|pomodoro|study\s+timer|"
+_FOCUS_WORDS += r"work\s+timer|focus\s+thing))"
+
+
+def _live_clause(low: str, st: "DialogState") -> list[dict] | None:
+    """Stopping / changing whatever is going on right now, however it's said."""
+    live = st.live or {}
+    focus_on = bool((live.get("focus") or {}).get("active"))
+    # explicit: "stop the focus timer", "cancel my timer", "turn focus off", "end focus mode"
+    if re.match(rf"^{_STOP_VERB}\s+{_FOCUS_WORDS}(?:\s+(?:now|early|off))?$", low) or \
+            re.match(rf"^turn\s+{_FOCUS_WORDS}\s+off$", low) or \
+            re.match(r"^(?:i'?m|i\s+am)\s+done\s+(?:focusing|studying|working)$", low) or \
+            (focus_on and re.match(r"^(?:i'?m|i\s+am)\s+(?:done|finished)$", low)):
+        return [{"skill": "focus", "action": "stop"}]
+    # "add 10 more minutes", "give me 15 more minutes", "extend it by 10 minutes"
+    m = re.match(r"^(?:add|give\s+me|extend\s+(?:it|the\s+timer|focus)\s+by|(?:i\s+)?need)\s+(\d+|ten|five|fifteen|twenty|"
+                 r"thirty)\s+more\s+minutes?(?:\s+(?:to|on)\s+(?:it|the\s+timer|focus))?$|^extend\s+(?:it|the\s+timer|focus)"
+                 r"\s+by\s+(\d+)\s+minutes?$", low)
+    if m and focus_on:
+        n = m.group(1) or m.group(2)
+        n = {"five": 5, "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30}.get(n, None) or int(n)
+        return [{"skill": "focus", "action": "extend", "minutes": int(n)}]
+    # corrections: "make it 30 minutes", "change it to an hour", "set it to 45"
+    m = re.match(r"^(?:make|change|set|switch)\s+(?:it|that|the\s+timer|focus)\s+(?:to\s+|for\s+)?(?P<n>\d+|an?|half an?)"
+                 r"\s*(?P<u>hours?|hrs?|minutes?|mins?)?$", low)
+    if m and focus_on:
+        n = {"a": 1, "an": 1, "half a": 0.5, "half an": 0.5}.get(m.group("n"), None)
+        n = float(m.group("n")) if n is None else n
+        minutes = int(n * 60) if (m.group("u") or "").startswith("h") else int(n)
+        return [{"skill": "focus", "minutes": max(5, minutes)}]
+    # "stop it", "cancel that", "turn it off", "never mind", "stop": whatever is going on
+    if re.match(rf"^(?:{_STOP_VERB}(?:\s+(?:it|that|this|everything|all\s+that))?|that'?s\s+enough|enough|"
+                r"never\s*mind|nevermind)(?:\s+(?:now|please))?$", low):
+        if live.get("recording"):
+            return None  # the chat side stops the recording
+        if focus_on and not re.match(r"^pause", low):
+            return [{"skill": "focus", "action": "stop"}]
+        if (live.get("music") or {}).get("playing"):
+            return [{"skill": "music_control", "action": "pause"}]
+        if live.get("at"):
+            st.nothing_running = True
+            return "nothing"  # we know nothing is running: let the chat say so (don't guess)
+    return None
+
+
 def _extra_clause(c: str, low: str, now) -> list[dict] | None:
     """Notes you already have, messages, email, reminders, volume, dark mode, Wi-Fi, screenshots, files."""
+    m = re.match(r"^(?:set|start|begin|make|put|run)\s+(?:a\s+|an\s+|my\s+|the\s+)?(?:(?P<n1>\d+)[\s-]*(?:minute|min)s?\s+)?"
+                 r"(?:focus(?:\s+(?:timer|session|mode))?|pomodoro(?:\s+timer)?|study\s+timer|work\s+timer)"
+                 r"(?:\s+(?:for|of)\s+(?P<n2>an?|half an?|\d+)\s*(?P<u>hours?|hrs?|minutes?|mins?))?$", low)
+    if m:
+        if m.group("n1"):
+            minutes = int(m.group("n1"))
+        else:
+            n = {"a": 1, "an": 1, "half a": 0.5, "half an": 0.5}.get(m.group("n2") or "", None)
+            n = float(m.group("n2")) if n is None and m.group("n2") else (n or 0)
+            minutes = int(n * 60) if (m.group("u") or "").startswith("h") else int(n or 25)
+        return [{"skill": "focus", "minutes": max(5, minutes)}]
     # focus guard: "help me focus for 45 minutes", "focus mode for an hour", "stop focus"
     if re.match(r"^(?:stop|end|cancel|turn off|exit|quit)\s+(?:the\s+)?focus(?:\s+(?:mode|time|session))?$|"
                 r"^i(?:'m| am)\s+done\s+focusing$", low):
         return [{"skill": "focus", "action": "stop"}]
     m = re.match(r"^(?:help me\s+|i need to\s+|let me\s+|let's\s+|start\s+(?:a\s+)?|turn on\s+|begin\s+)?"
-                 r"(?:focus|concentrate|study|get (?:some )?work done)(?:\s+(?:mode|time|session))?"
+                 r"(?:focus(?:ing)?|concentrate|study(?:ing)?|get (?:some )?work done|lock(?:ing)? in|get to work|deep work)"
+                 r"(?:\s+(?:mode|time|session))?"
                  r"(?:\s+(?:for|during)\s+(?P<n>an?|half an?|\d+)\s*(?P<u>hours?|hrs?|minutes?|mins?))?$", low)
     if m and (m.group("n") or re.match(r"^(?:help me|i need to|start|turn on|begin|let)", low) or "mode" in low
-              or low == "focus"):
+              or low in ("focus", "lock in", "get to work", "deep work")):
         n = {"a": 1, "an": 1, "half a": 0.5, "half an": 0.5}.get(m.group("n") or "", None)
         n = float(m.group("n")) if n is None and m.group("n") else (n or 0)
         minutes = int(n * 60) if (m.group("u") or "").startswith("h") else int(n or 25)
@@ -221,7 +285,7 @@ def _extra_clause(c: str, low: str, now) -> list[dict] | None:
     if re.match(r"^(?:empty|clear)\s+(?:the\s+|my\s+)?(?:trash|bin|recycle bin)$", low):
         return [{"skill": "empty_trash"}]
     # folders: "open my downloads", "show me my documents folder"
-    m = re.match(r"^(?:open|show me|show|go to|take me to|pull up)\s+(?:my\s+|the\s+)?(downloads|documents|desktop|pictures|"
+    m = re.match(r"^(?:open|show me|show|go to|take me to|pull up)\s+(?:up\s+)?(?:my\s+|the\s+)?(downloads|documents|desktop|pictures|"
                  r"movies|music folder|applications|home)(?:\s+folder)?$", low)
     if m:
         name = {"music folder": "Music", "home": ""}.get(m.group(1), m.group(1).title())
@@ -229,10 +293,12 @@ def _extra_clause(c: str, low: str, now) -> list[dict] | None:
     # more ways to say "text someone": "send mom a text saying hi", "text john I'll be late"
     m = re.match(r"^send\s+(?P<to>[\w.@+' -]+?)\s+an?\s+(?:text|message|imessage)\s+(?:saying|that says|:)?\s*(?P<x>.+)$", c, re.I)
     if m:
-        return [{"skill": "send_message", "to": _value(m.group("to")), **_content(m.group("x"), now)}]
+        return [{"skill": "send_message", "to": re.sub(r"^(?:my|the)\s+", "", _value(m.group("to")), flags=re.I),
+                 **_content(m.group("x"), now)}]
     m = re.match(r"^text\s+(?P<to>(?:my\s+)?[A-Za-z][\w'-]*)\s+(?P<x>(?!saying\b|that\b).{2,})$", c, re.I)
     if m and not re.search(r"\b(?:saying|that says)\b|:", c, re.I):
-        return [{"skill": "send_message", "to": _value(m.group("to")), "text": _value(m.group("x"))}]
+        return [{"skill": "send_message", "to": re.sub(r"^(?:my|the)\s+", "", _value(m.group("to")), flags=re.I),
+                 "text": _value(m.group("x"))}]
     # add to an existing note: "add eggs to my groceries note", "add X to the note called keyboard"
     m = re.match(r"^(?:add|append|put|write|type)\s+(?P<x>.+?)\s+(?:to|in|into|on)\s+(?:my|the)\s+(?:note\s+(?:called|titled|named)\s+"
                  r"(?P<t1>.+)|(?P<t2>.+?)\s+note)$", c, re.I)
@@ -242,7 +308,8 @@ def _extra_clause(c: str, low: str, now) -> list[dict] | None:
     m = re.match(r"^(?:text|message|imessage|send\s+(?:a\s+)?(?:text|message|imessage)\s+to|send|tell)\s+(?P<to>[\w.@+' -]+?)"
                  r"(?:\s*[,:]\s*|\s+(?:saying|that says|that|telling (?:them|him|her)|to say|and say|with)\s+)(?P<x>.+)$", c, re.I)
     if m and not re.match(r"^(?:an?\s+)?(?:email|e-mail)\b", m.group("to"), re.I):
-        return [{"skill": "send_message", "to": _value(m.group("to")), **_content(m.group("x"), now)}]
+        return [{"skill": "send_message", "to": re.sub(r"^(?:my|the)\s+", "", _value(m.group("to")), flags=re.I),
+                 **_content(m.group("x"), now)}]
     # email (a draft you send yourself): "email bob about the meeting", "write an email to sara saying ..."
     m = re.match(r"^(?:email|e-mail|send\s+(?:an\s+)?e-?mail\s+to|write\s+(?:an\s+)?e-?mail\s+to|draft\s+(?:an\s+)?e-?mail\s+to|"
                  r"compose\s+(?:an\s+)?e-?mail\s+to)\s+(?P<to>[\w.@+' -]+?)(?:\s+(?:about|regarding|re)\s+(?P<subj>.+?))?"
@@ -270,14 +337,16 @@ def _extra_clause(c: str, low: str, now) -> list[dict] | None:
             step["when"], step["when_text"] = when.isoformat(timespec="minutes"), when_text
         return [step]
     # volume / mute
-    if re.match(r"^(?:turn|crank|bring)\s+(?:the\s+)?(?:volume|sound|music|it)\s+up$|^(?:volume up|louder|make it louder)$", low):
+    if re.match(r"^(?:turn|crank|bring|pump)\s+(?:the\s+)?(?:volume|sound|music|it)\s+up$|^(?:volume up|louder|make it louder)$|"
+                r"^(?:raise|increase|boost|up)\s+(?:the\s+)?(?:volume|sound)$", low):
         return [{"skill": "volume", "action": "up"}]
-    if re.match(r"^(?:turn|bring)\s+(?:the\s+)?(?:volume|sound|music|it)\s+down$|^(?:volume down|quieter|make it quieter)$", low):
+    if re.match(r"^(?:turn|bring)\s+(?:the\s+)?(?:volume|sound|music|it)\s+down$|^(?:volume down|quieter|make it quieter)$|"
+                r"^(?:lower|decrease|reduce|drop)\s+(?:the\s+)?(?:volume|sound)$", low):
         return [{"skill": "volume", "action": "down"}]
     m = re.match(r"^(?:set|turn|change)\s+(?:the\s+)?(?:volume|sound)\s+to\s+(\d{1,3})\s*(?:%|percent)?$", low)
     if m:
         return [{"skill": "volume", "action": "set", "level": int(m.group(1))}]
-    if re.match(r"^(?:mute|silence)(?:\s+(?:the\s+)?(?:sound|volume|mac|computer|it))?$", low):
+    if re.match(r"^(?:mute|silence)(?:\s+(?:the\s+|my\s+)?(?:sound|volume|mac|computer|laptop|it|everything))?$", low):
         return [{"skill": "volume", "action": "mute"}]
     if re.match(r"^unmute(?:\s+.*)?$", low):
         return [{"skill": "volume", "action": "unmute"}]
@@ -288,11 +357,13 @@ def _extra_clause(c: str, low: str, now) -> list[dict] | None:
     if re.match(r"^turn off\s+(?:the\s+)?dark\s+mode$", low):
         return [{"skill": "dark_mode", "on": False}]
     # wifi on/off
-    m = re.match(r"^turn\s+(on|off)\s+(?:the\s+|my\s+)?wi-?fi$|^turn\s+(?:the\s+|my\s+)?wi-?fi\s+(on|off)$", low)
+    m = re.match(r"^(?:turn|switch|shut|power)\s+(on|off)\s+(?:the\s+|my\s+)?wi-?fi$|"
+                 r"^(?:turn|switch|shut|power)\s+(?:the\s+|my\s+)?wi-?fi\s+(on|off)$", low)
     if m:
         return [{"skill": "wifi", "on": (m.group(1) or m.group(2)) == "on"}]
     # screenshot
-    if re.match(r"^(?:take|grab|make|capture)\s+(?:a\s+)?(?:screenshot|screen ?shot|picture of (?:my|the) screen)$", low):
+    if re.match(r"^(?:take|grab|make|capture|get|do)\s+(?:a\s+)?(?:screenshot|screen ?shot|ss|screenie|screengrab|"
+                r"pic(?:ture)? of (?:my|the) screen)$|^screenshot(?:\s+(?:this|it|that))?$", low):
         return [{"skill": "screenshot"}]
     # files: "open my resume", "open the budget spreadsheet", "open report.pdf"
     m = re.match(r"^(?:open|show me|pull up|find and open)\s+(?:my\s+|the\s+)?(?P<f>.+?\.(?:pdf|docx?|xlsx?|pptx?|pages|numbers|"
@@ -308,6 +379,11 @@ def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
     """One step (or None if this clause isn't something Clicky can do)."""
     c = c.strip()
     low = c.lower()
+    live = _live_clause(low, st)
+    if live == "nothing":
+        return None
+    if live is not None:
+        return live
     extra = _extra_clause(c, low, now)
     if extra is not None:
         return extra
@@ -318,7 +394,8 @@ def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
         return [{"skill": "music_control", "action": "play"}]
     if re.match(r"^(?:skip|next)(?:\s+(?:this\s+)?(?:song|track))?$|^(?:play\s+)?(?:the\s+)?next (?:song|track)$", low):
         return [{"skill": "music_control", "action": "next"}]
-    if re.match(r"^(?:previous|go back|last)(?:\s+(?:song|track))$|^play the (?:previous|last) (?:song|track)$", low):
+    if re.match(r"^(?:previous|go back|last)(?:\s+(?:a\s+)?(?:song|track))$|^play the (?:previous|last) (?:song|track)$|"
+                r"^(?:go\s+)?back\s+(?:a|one)\s+(?:song|track)$", low):
         return [{"skill": "music_control", "action": "previous"}]
     # play a song
     m = re.match(r"^play\s+(?P<q>.+?)(?:\s+(?:on|in|from|with)\s+(?:apple\s+)?music(?:\s+app)?)?$", c, re.I)
@@ -411,7 +488,7 @@ def _clause(c: str, ctx: dict, st: DialogState, now) -> list[dict] | None:
         if pane:
             return [{"skill": "open_settings", "pane": pane}]
     # websites
-    m = re.match(r"^(?:open|go to|take me to|visit|launch|bring up|pull up)\s+(?:the\s+)?(?P<s>[\w.\-]+\.(?:com|org|net|"
+    m = re.match(r"^(?:open|go to|go on|take me to|visit|launch|bring up|pull up|watch|browse|check|scroll)\s+(?:the\s+)?(?P<s>[\w.\-]+\.(?:com|org|net|"
                  r"io|edu|gov|co|ai|app|dev|tv|us)(?:/\S*)?|youtube|gmail|netflix|amazon|facebook|instagram|twitter|"
                  r"reddit|tiktok|wikipedia|chatgpt|github|linkedin|espn)(?:\s+(?:website|site|page|\.com))?$", c, re.I)
     if m:
@@ -573,6 +650,8 @@ def describe(step: dict) -> str:
     if k == "fill_form":
         return "fill in this form from your Contacts card"
     if k == "focus":
+        if step.get("action") == "extend":
+            return f"add {step.get('minutes')} minutes to focus time"
         return "stop focus time" if step.get("action") == "stop" else f"focus for {step.get('minutes', 25)} minutes"
     if k == "open_url":
         u = step["url"]
@@ -591,6 +670,7 @@ def summary_of(plan: list[dict]) -> str:
 def plan(text: str, st: DialogState | None = None, now: dt.datetime | None = None) -> dict | None:
     """Everyday English -> {"plan": [...], "summary": "..."} or None (then it's a normal chat question)."""
     st = st or DialogState()
+    st.nothing_running = False
     t = rewrite(text)
     if not t:
         return None
@@ -648,6 +728,7 @@ PLAN_SCHEMA = {
         "app": {"type": "string"}, "text": {"type": "string"}, "compose": {"type": "string"},
         "query": {"type": "string"}, "pane": {"type": "string"}, "url": {"type": "string"}, "title": {"type": "string"},
         "to": {"type": "string"}, "subject": {"type": "string"}, "on": {"type": "boolean"}, "keys": {"type": "string"},
+        "minutes": {"type": "integer"},
         "action": {"type": "string"}}, "required": ["skill"]}}},
     "required": ["steps"]}
 
@@ -656,7 +737,7 @@ open_app(app) quit_app(app) open_settings(pane) play_music(query) music_control(
 new_note(title, text OR compose) type_text(text OR compose) open_url(url) open_file(query)
 append_note(title, text) send_message(to, text) email_draft(to, subject, text OR compose) reminder(text)
 volume(action: up|down|mute|unmute) dark_mode(on: true|false) wifi(on: true|false) screenshot()
-keys(keys e.g. "cmd+t") lock_screen() empty_trash()
+keys(keys e.g. "cmd+t") lock_screen() empty_trash() fill_form()
 Use "compose" when the AI must write it (e.g. "a paragraph on why recycling matters"), "text" for exact words.
 Values are ONLY the thing itself: never include command words like titled, called, named, saying, that says, about.
 If the request is a question or chat, not something to do on the Mac, return {"steps":[{"skill":"none"}]}.
@@ -667,7 +748,11 @@ Examples:
 "start a note called groceries with apples and bread" -> {"steps":[{"skill":"new_note","title":"groceries","text":"apples and bread"}]}
 "shut spotify" -> {"steps":[{"skill":"quit_app","app":"Spotify"}]}
 "what is the capital of france" -> {"steps":[{"skill":"none"}]}
-Context: the last app used was "{last_app}". Answer with JSON only."""
+If they're stopping or changing something that's running (see "Right now"), act on THAT (e.g. "kill it" while a focus
+timer runs -> {"steps":[{"skill":"focus","action":"stop"}]}). focus(minutes) starts focus time; focus(action: stop)
+ends it; focus(action: extend, minutes) adds time.
+Right now: {live}
+Context: the last app used was "{last_app}". Recent conversation is included. Answer with JSON only."""
 
 
 def looks_like_command(text: str) -> bool:
@@ -682,7 +767,12 @@ def looks_like_command(text: str) -> bool:
         return False  # "show me where X is": Clicky points; no planning needed
     if re.match(r"^(?:open|show|find|go to)\s", t) and not re.search(r"\b(?:and|then)\b|,", t):
         return False  # a single "open X" that isn't an app: Clicky looks for it on screen instead
-    return bool(re.match(rf"^(?:{VERBS}|get|fire up|pull up|load|shut|bring|do)\b", t))
+    asked = bool(re.search(r"\b(?:can|could|would|will)\s+you\b|\bplease\b|\bi\s+(?:want|need|'d like)\b|\blet'?s\b",
+                           text, re.I))
+    doing = rf"^(?:{VERBS}|get|fire up|pull up|load|shut|bring|do|cancel|end|kill|set|change|turn|remove|delete|" \
+            r"extend|finish|schedule|call|lower|raise|increase|decrease|enable|disable|switch|toggle|clear|close|hide|" \
+            r"make|put|give|keep|restart|resume|continue|undo|redo|go)\b"
+    return bool(re.match(doing, t)) or (asked and not re.match(r"^(?:tell|explain|describe|say)\b", t))
 
 
 def validate_llm_plan(data: dict) -> list[dict] | None:
@@ -696,6 +786,8 @@ def validate_llm_plan(data: dict) -> list[dict] | None:
         need = {"open_app": "app", "quit_app": "app", "open_settings": "pane", "play_music": "query",
                 "music_control": "action", "open_url": "url", "open_file": "query", "append_note": "title",
                 "send_message": "to", "volume": "action", "reminder": "text", "keys": "keys"}.get(k)
+        if k == "focus" and not (s.get("action") in ("stop", "extend") or s.get("minutes")):
+            continue
         if need and not str(s.get(need) or "").strip():
             continue
         if k == "open_url" and not str(s["url"]).startswith(("http://", "https://")):
@@ -709,6 +801,11 @@ def validate_llm_plan(data: dict) -> list[dict] | None:
                                                               "title", "to", "subject", "keys") if s.get(f)}}
         if k in ("dark_mode", "wifi"):
             clean["on"] = bool(s.get("on"))
+        if k == "focus":
+            if s.get("action") in ("stop", "extend"):
+                clean["action"] = s["action"]
+            if s.get("minutes"):
+                clean["minutes"] = max(1, min(240, int(s["minutes"])))
         if k == "send_message" and not ({"text", "compose"} & set(clean)):
             continue  # never send an empty message
         for f in ("title", "text"):  # a small model sometimes copies the cue word into the value

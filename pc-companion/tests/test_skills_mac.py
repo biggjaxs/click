@@ -276,3 +276,32 @@ def test_skill_library_find_export_import(tmp_path):
     assert other.find("x")["steps"] == [{"target": "OK"}]
     assert simplify([{"app": "A"}, {"app": "B"}, {"target": "Go"}, {"target": "Go"}, {"app": "C"}]) == [
         {"app": "B"}, {"target": "Go"}]
+
+
+def test_focus_reminds_every_time_you_go_back(monkeypatch):
+    import types as _t
+
+    from companion import focus as fmod
+    from companion import voice
+    from companion.platforms import Rect, Window
+
+    monkeypatch.setattr(voice, "speak", lambda *a, **k: None)
+    nudges = []
+    app = _t.SimpleNamespace(ghost=_t.SimpleNamespace(flags={}, primary_center=lambda: (700, 400)), paused=False,
+                             bridge=_t.SimpleNamespace(ghostMove=_t.SimpleNamespace(emit=lambda *a: nudges.append(a)),
+                                                       narrate=_t.SimpleNamespace(emit=lambda *a: None)),
+                             notify=lambda t: None, settings={"focus_voice": True})
+    f = fmod.Focus(app)
+    f.until = __import__("time").time() + 1500
+    yt = Window(1, "Funny cats - YouTube", "Safari", Rect(0, 0, 900, 700))
+    work = Window(2, "Essay", "Pages", Rect(0, 0, 900, 700))
+    pod = Window(3, "The Daily - Podcast - YouTube", "Safari", Rect(0, 0, 900, 700))
+    t = 1000.0
+    assert f.observe(yt, 3, t) == "switched"          # opened YouTube: reminded
+    assert f.observe(yt, 3, t + 10) is None             # not every 3 seconds...
+    assert f.observe(yt, 3, t + 50) == "still"          # ...but again while you stay
+    assert f.observe(work, 3, t + 53) is None           # back to work
+    assert f.observe(yt, 3, t + 60) == "switched"       # closed it and came back: reminded again
+    assert f.observe(pod, 3, t + 70) is None            # podcasts are fine
+    assert fmod.distracting("Discord", "") and fmod.distracting("Safari", "Instagram")
+    assert not fmod.distracting("Podcasts", "Episode 4") and not fmod.distracting("Books", "Dune")

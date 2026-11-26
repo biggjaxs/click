@@ -548,3 +548,81 @@ def test_lesson_questions_are_never_pre_answered_while_typing(services):
     assert not o._speculable("how do I add a cube in blender")
     assert not o._speculable("show me how to send an email")
     assert o._speculable("why is the sky blue")
+
+
+def _live(services, live, extra=None):
+    """Wire a computer that reports `live` as what's going on right now."""
+    calls = []
+    responses = {("system", "state"): {**live, "at": 1.0}, ("skills", "run"): {"status": "done", "steps": [
+        {"step": "Stop focus time", "result": "Focus done: 25 minutes."}]}}
+    responses.update(extra or {})
+
+    async def fake_request(service, action, payload, **kw):
+        calls.append((service, action, payload))
+        return responses.get((service, action), {"status": "ok"})
+
+    async def fake_event(*a, **k):
+        calls.append(("event",) + a)
+
+    services.link.connected = True
+    services.link.capabilities = {"cpu_only": True}
+    services.link.request = fake_request
+    services.link.send_event = fake_event
+    return calls
+
+
+def _say(services, text, conv=None):
+    return run(services.orchestrator.handle(send=Recorder(), text=text, conversation_id=conv, upload_ids=[],
+                                            incognito_key=None, state=_state()))
+
+
+def test_stop_the_focus_timer_while_it_runs(services):
+    focus = {"focus": {"active": True, "minutes_left": 18, "minutes_total": 25}}
+    for text in ("Okay, can you stop the focus timer?", "kill the timer", "stop it", "I'm done", "cancel that"):
+        calls = _live(services, focus)
+        out = _say(services, text)
+        task = next(c for c in calls if c[:2] == ("skills", "run"))
+        assert task[2]["plan"] == [{"skill": "focus", "action": "stop"}], text
+        assert "Focus done" in out["answer"]
+
+
+def test_time_left_is_read_from_the_real_timer(services):
+    _live(services, {"focus": {"active": True, "minutes_left": 18, "minutes_total": 25}})
+    assert _say(services, "how much time is left?")["answer"].startswith("18 minutes left")
+    _live(services, {})
+    assert "no focus timer" in _say(services, "how long is left on my timer")["answer"]
+
+
+def test_nothing_running_stop_it_is_not_guessed(services):
+    calls = _live(services, {})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "There's nothing running to stop right now."}]])
+    out = _say(services, "stop it")
+    assert not any(c[:2] == ("skills", "run") for c in calls)
+    first = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][-1]
+    assert "Right now on the computer: nothing special" in first["messages"][-1]["content"]
+    assert out["answer"].startswith("There's nothing running")
+
+
+def test_the_ai_always_knows_whats_going_on(services):
+    _live(services, {"focus": {"active": True, "minutes_left": 9, "minutes_total": 30},
+                     "front": {"app": "Safari", "title": "YouTube"}})
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "ok"}]])
+    _say(services, "why do i keep getting distracted")
+    msgs = [c for c in services.pc_backend.calls if c.get("fmt") != "json"][-1]["messages"]
+    assert "a focus timer is running (9 of 30 minutes left)" in msgs[-1]["content"]
+    assert "NEVER say you did" in msgs[0]["content"]  # the honesty rule is in the AI's instructions
+
+
+def test_corrections_and_follow_ups_in_a_conversation(services):
+    calls = _live(services, {"focus": {"active": True, "minutes_left": 20, "minutes_total": 25}})
+    _say(services, "actually make it 30 minutes")
+    assert next(c for c in calls if c[:2] == ("skills", "run"))[2]["plan"] == [{"skill": "focus", "minutes": 30}]
+    calls = _live(services, {})
+    conv = _say(services, "open safari")["answer"] and None
+    out = run(services.orchestrator.handle(send=Recorder(), text="open safari", conversation_id=None, upload_ids=[],
+                                           incognito_key=None, state=_state()))
+    cid = services.db.one("SELECT MAX(id) AS id FROM conversations")["id"]
+    calls.clear()
+    _say(services, "now close it", conv=cid)
+    task = next(c for c in calls if c[:2] == ("skills", "run"))
+    assert task[2]["plan"] == [{"skill": "quit_app", "app": "Safari"}]

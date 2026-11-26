@@ -101,9 +101,14 @@ def _now_str() -> str:
     return dt.datetime.now().strftime("%A %d %B %Y, %H:%M")
 
 
+BRIEF_NOTE = ("(Reply in at most two short sentences: this answer shows in a small box. If they'd need more, end with "
+              "\"Open the full chat for more.\")")
+
+
 class TurnState:
     def __init__(self):
         self.cancel = asyncio.Event()
+        self.brief = False
 
 
 class Orchestrator:
@@ -186,8 +191,44 @@ class Orchestrator:
                      "Use it when relevant; never repeat it back.")
         return "\n\n".join(parts)
 
+    async def _refresh_live(self, conv_id) -> None:
+        """Ask the computer what's going on right now (fast, local). Kept in the conversation's state."""
+        st = self.dialog.setdefault(conv_id or 0, language.DialogState())
+        if not self.deps.link.connected:
+            st.live = {}
+            return
+        try:
+            st.live = await self.deps.link.request("system", "state", {}, timeout=4)
+        except Exception:  # noqa: BLE001 - older Clicky or a hiccup: carry on without it
+            st.live = {}
+        self.live = st.live
+
+    @staticmethod
+    def describe_live(live: dict) -> str:
+        bits = []
+        f = live.get("focus") or {}
+        if f.get("active"):
+            bits.append(f"a focus timer is running ({f.get('minutes_left')} of {f.get('minutes_total')} minutes left)")
+        if live.get("recording"):
+            bits.append(f"Clicky is recording a skill called \"{live['recording']}\"")
+        if live.get("lesson"):
+            ls = live["lesson"]
+            bits.append(f"a lesson \"{ls.get('title')}\" is on step {ls.get('step')} of {ls.get('total')}")
+        m = live.get("music") or {}
+        if m.get("playing"):
+            bits.append(f"music is playing ({m.get('track')})")
+        fr = live.get("front") or {}
+        if fr.get("app"):
+            bits.append(f"the app in front is {fr['app']}" + (f" (\"{fr['title']}\")" if fr.get("title") else ""))
+        if live.get("paused"):
+            bits.append("Click is paused")
+        return "; ".join(bits) or "nothing special"
+
     def _context_block(self, recalled: dict, conv_id: int | None, has_tools: bool, screen: dict | None) -> str:
         parts = [f"Time: {_now_str()}."]
+        live = getattr(self, "live", None)
+        if live:
+            parts.append("Right now on the computer: " + self.describe_live(live) + ".")
         if recalled.get("core"):
             parts.append("About the user: " + "; ".join(recalled["core"]))
         if recalled.get("relevant"):
@@ -293,6 +334,7 @@ class Orchestrator:
         # Quick memory commands: "remember that…" / "forget that…"
         memory_note = ""
         quick: Reply | None = None  # "remember X" / "forget X" are answered instantly, without the AI model
+        await self._refresh_live(conversation_id)  # what's going on right now (focus timer, music, front app...)
         m_rem, m_forget = REMEMBER_RE.match(text), FORGET_RE.match(text)
         if m_rem and not incognito:
             if perms.enabled("memory_saving"):
@@ -348,6 +390,8 @@ class Orchestrator:
                 point_note = (f"(The user is following your lesson \"{lesson_q.group('t')}\" on their Mac and is on "
                               f"step {lesson_q.group('n')}: \"{lesson_q.group('s')}\". Answer their question about this "
                               "step in one to three short, friendly sentences. Don't call any tools.)")
+        if point_note is None:
+            point_note = self._live_answer(text, conversation_id)  # "how long is left on my timer?"
         if point_note is None and backend.source == "pc":
             point_note = await self._skills_talk(text, send)  # recording / saved skills
         if point_note is None and RECALL_RE.search(text):
@@ -359,7 +403,7 @@ class Orchestrator:
             if math_answer:
                 point_note = Reply(math_answer)  # plain math: instant, no AI needed
         if point_note is None and backend.source == "pc":
-            point_note = await self._use_speculation(typed_in, text)  # answered while you typed
+            point_note = await self._use_speculation(typed_in, text, getattr(state, "brief", False))
         if point_note is None and backend.source == "pc":
             point_note = await self._guide(text, send)  # "show me how to send an email": a guided lesson
         if point_note is None and backend.source == "pc" and mentions_clicky(text):
@@ -433,8 +477,8 @@ class Orchestrator:
             return None
         st = self.dialog.setdefault(conversation_id or 0, language.DialogState())
         task = language.plan(text, st)
-        if task is None and language.looks_like_command(text):
-            task = await self._llm_plan(text, st, send)
+        if task is None and language.looks_like_command(text) and not st.nothing_running:
+            task = await self._llm_plan(text, st, send, conversation_id)
         if not task:
             return None
         written = []
@@ -522,12 +566,32 @@ class Orchestrator:
         r.streamed = True
         return r
 
+    def _live_answer(self, text: str, conv_id) -> "Reply | None":
+        """Questions about what's running, answered from the real state (never guessed)."""
+        live = (self.dialog.get(conv_id or 0) or language.DialogState()).live or {}
+        t = language.rewrite(text).lower()
+        if re.search(r"\b(?:how\s+(?:much|long)|time\s+left|minutes?\s+left|left\s+on)\b", t) and \
+                re.search(r"\b(?:timer|focus|left|remaining)\b", t):
+            f = live.get("focus") or {}
+            if f.get("active"):
+                return Reply(f"{f.get('minutes_left')} minutes left of your {f.get('minutes_total')}-minute focus time.")
+            if live.get("at"):
+                return Reply("There's no focus timer running right now. Say \u201cfocus for 30 minutes\u201d to start one.")
+        if re.search(r"\bis\s+(?:the\s+|my\s+)?(?:focus|timer)(?:\s+timer)?\s+(?:still\s+)?(?:on|running|going)\b", t):
+            f = live.get("focus") or {}
+            if live.get("at"):
+                return Reply(f"Yes: {f.get('minutes_left')} minutes left." if f.get("active") else "No, there's no focus "
+                             "timer running.")
+        return None
+
     async def _skills_talk(self, text: str, send) -> "Reply | None":
         """Teach-once recording and the saved-skills library."""
         deps = self.deps
         if not deps.link.connected:
             return None
-        if getattr(self, "recording", False) and STOP_REC_RE.match(text):
+        live_rec = bool((getattr(self, "live", None) or {}).get("recording"))
+        if (getattr(self, "recording", False) or live_rec) and (STOP_REC_RE.match(text) or re.match(
+                r"^\s*(?:ok(?:ay)?[,\s]+)?(?:stop|end|finish|cancel)\s*(?:it|that|this)?[\s.!]*$", text, re.I)):
             self.recording = False
             res = await deps.link.request("skills", "record", {"op": "stop"}, timeout=20)
             if not res.get("saved"):
@@ -728,10 +792,15 @@ class Orchestrator:
         text = re.sub(r"^(?:sure|okay|ok|here(?:'s| is)[^:\n]*)[:!,.]\s*", "", text, flags=re.I).strip()
         return re.sub(r"[*#`]+", "", text)
 
-    async def _llm_plan(self, text: str, st, send) -> dict | None:
+    async def _llm_plan(self, text: str, st, send, conv=None) -> dict | None:
         """The AI turns a request the rules didn't cover into steps (checked against the allowed list)."""
-        msgs = [{"role": "system", "content": language.PLANNER_PROMPT.replace("{last_app}", st.last_app or "none")},
-                {"role": "user", "content": language.rewrite(text)}]
+        prompt = (language.PLANNER_PROMPT.replace("{last_app}", st.last_app or "none")
+                  .replace("{live}", self.describe_live(st.live or {})))
+        recent = [m for m in self._history(conv, None)[-5:-1] if m["role"] in ("user", "assistant")] if conv else []
+        convo = "\n".join(f"{m['role']}: {str(m['content'])[:200]}" for m in recent)
+        msgs = [{"role": "system", "content": prompt},
+                {"role": "user", "content": (f"Recent conversation:\n{convo}\n\nNew request: " if convo else "")
+                 + language.rewrite(text)}]
         out = []
         try:
             async for ev in self.deps.pc_backend.chat_stream(msgs, None, fmt=language.PLAN_SCHEMA,
@@ -837,9 +906,9 @@ class Orchestrator:
             return False
         return not any(_WANT[g].search(t) for g in ("files", "image") if g in _WANT)
 
-    async def speculate(self, conversation_id: int | None, partial: str, send) -> None:
+    async def speculate(self, conversation_id: int | None, partial: str, send, brief: bool = False) -> None:
         sp = getattr(self, "_spec", None)
-        key = self._spec_key(conversation_id, partial)
+        key = self._spec_key(conversation_id, partial) + (brief,)
         if sp and sp["key"] == key:
             return
         if sp and not sp["task"].done():
@@ -847,7 +916,7 @@ class Orchestrator:
         if not self._speculable(partial):
             self._spec = None
             return
-        sp = {"key": key, "text": partial, "answer": "", "done": False}
+        sp = {"key": key, "text": partial, "answer": "", "done": False, "brief": brief}
         sp["task"] = asyncio.create_task(self._spec_run(sp, conversation_id, partial, send))
         self._spec = sp
 
@@ -873,11 +942,13 @@ class Orchestrator:
                 web = ""
         messages = [{"role": "system", "content": self._system_prompt("pc", False)}]
         messages += self._history(conv, None) if conv else []
+        brief = f"\n\n{BRIEF_NOTE}" if sp.get("brief") else ""
         messages.append({"role": "user",
-                         "content": f"{self._context_block(recalled, conv, False, None)}{web}\n\n{text}"})
+                         "content": f"{self._context_block(recalled, conv, False, None)}{web}\n\n{text}{brief}"})
         out: list[str] = []
         last_sent = 0.0
-        async for ev in deps.pc_backend.chat_stream(messages, None, options={"num_predict": 220} if self.fast else {}):
+        opts = {"num_predict": 130 if sp.get("brief") else 220} if self.fast else ({"num_predict": 130} if sp.get("brief") else {})
+        async for ev in deps.pc_backend.chat_stream(messages, None, options=opts):
             if ev["type"] == "token":
                 out.append(ev["text"])
                 sp["answer"] = "".join(out)
@@ -887,9 +958,9 @@ class Orchestrator:
         sp["done"] = True
         await send({"type": "preview", "for": text, "text": sp["answer"], "done": True})
 
-    async def _use_speculation(self, conv, text: str) -> "Reply | None":
+    async def _use_speculation(self, conv, text: str, brief: bool = False) -> "Reply | None":
         sp = getattr(self, "_spec", None)
-        if not sp or sp["key"] != self._spec_key(conv, text):
+        if not sp or sp["key"] != self._spec_key(conv, text) + (brief,):
             if sp and not sp["task"].done():
                 sp["task"].cancel()  # the guess was for different words: free the AI for the real question
             self._spec = None
@@ -954,6 +1025,9 @@ class Orchestrator:
             await send({"type": "notice", "text": "Your computer is offline, so the small backup model on the Pi is answering."})
         tools = select_tools(deps, text) if source == "pc" and "Don't call any tools" not in (memory_note or "") else []
         options = {"num_predict": 220} if self.fast else {}
+        if getattr(state, "brief", False):
+            options["num_predict"] = 130
+            memory_note = (memory_note + "\n" if memory_note else "") + BRIEF_NOTE
         max_rounds = 3 if self.fast else deps.cfg.max_tool_rounds
         messages = [{"role": "system", "content": self._system_prompt(source, bool(tools))}]
         messages += self._history(conversation_id, incognito_key)

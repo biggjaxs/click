@@ -76,6 +76,7 @@ ROUTES = {
     ("skills", "guide"): ("cursor", "skills_guide", False),
     ("skills", "briefing"): ("files", "skills_briefing", False),
     ("skills", "record"): ("actions", "skills_record", False),
+    ("system", "state"): (None, "system_state", False),
     ("skills", "library"): (None, "skills_library", False),
     ("skills", "replay"): ("actions", "skills_replay", False),
 }
@@ -238,7 +239,7 @@ class CompanionServer:
                 await self.send(error_reply(msg, f"Unknown request {key[0]}.{key[1]}", "unknown"))
                 return
             perm, handler, blocking = route
-            if app.paused and key != ("cursor", "hide"):
+            if app.paused and key not in (("cursor", "hide"), ("system", "state")):
                 raise PermissionError("Click is paused on this computer.")
             if perm and not self.settings["permissions"].get(perm, True):
                 raise PermissionError(f"This computer has '{perm}' turned off in the Click Companion settings.")

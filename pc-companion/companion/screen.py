@@ -331,7 +331,7 @@ class ScreenService:
             if score >= 0.6:
                 scored.append((min(1.0, score + boost), el))
 
-        for getter, boost in ((self.platform.dock_items, 0.04), (self.platform.menu_bar_items, 0.02),
+        for getter, boost in ((self._dock_items, 0.04), (self._menu_items, 0.02),
                               (self.platform.desktop_items, 0.03)):
             try:
                 for el in getter():
@@ -353,6 +353,19 @@ class ScreenService:
         # Clicky's built-in Mac map: knows where the Apple menu, Wi-Fi, Control Center, Dock, Trash... are,
         # even without permissions. A precise Accessibility match still wins.
         best = max((sc for sc, _ in scored), default=0.0)
+        if landmark is not None and landmark.window_title == "Menu bar":
+            # use the real icon's exact position when macOS shows it (Wi-Fi, battery, clock...)
+            from .macmap import exact_menu_item
+
+            try:
+                real = exact_menu_item(landmark.extra.get("key", ""), self._menu_items())
+            except Exception:  # noqa: BLE001
+                real = None
+            if real is not None:
+                real.extra["note"] = landmark.extra.get("note", "")
+                scored.append((0.995, real))
+                best = 0.995
+                source = "menu bar (exact)"
         if landmark is not None:
             if best < 0.95:
                 scored.append((0.97, landmark))
@@ -388,6 +401,37 @@ class ScreenService:
         if problems and not found:
             out["permission_problem"] = " ".join(problems)
         return out
+
+    # ---- always up to date: Clicky keeps a fresh list of the Dock and menu bar in the background -----------
+    def start_index(self, every: float = 4.0) -> None:
+        import time as _t
+
+        self._index = {"dock": [], "menu": [], "at": 0.0}
+
+        def loop():
+            while True:
+                try:
+                    self._index = {"dock": self.platform.dock_items(), "menu": self.platform.menu_bar_items(),
+                                   "at": _t.time()}
+                except Exception:  # noqa: BLE001
+                    pass
+                _t.sleep(every)
+
+        threading.Thread(target=loop, name="click-screen-index", daemon=True).start()
+
+    def _fresh(self, key: str):
+        import time as _t
+
+        idx = getattr(self, "_index", None)
+        if idx and _t.time() - idx["at"] < 6 and idx[key]:
+            return idx[key]
+        return None
+
+    def _dock_items(self):
+        return self._fresh("dock") or self.platform.dock_items()
+
+    def _menu_items(self):
+        return self._fresh("menu") or self.platform.menu_bar_items()
 
     def _app_on_screen(self, query: str):
         """Find an app by name: its open window (title bar) or its Dock icon."""

@@ -327,7 +327,7 @@ def reduce_motion() -> bool:
 
 
 def paint_goo(p: QPainter, area: QRectF, margin: float, panel_r: float, t: float, accent_hex: str,
-              off: float = GOO_OFF, amp: float = GOO_AMP, droplets: bool = True) -> None:
+              off: float = GOO_OFF, amp: float = GOO_AMP, droplets: bool = False) -> None:
     """A floating ball of goo: a flat, calm panel inside (easy to read), wrapped in slowly flowing
     liquid in the orb's colours (cyan to blue), with little droplets drifting by.
     Used by the full chat and the Ask panel, so both look the same."""

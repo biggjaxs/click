@@ -20,6 +20,17 @@ CASES = [
     ("save this", "keys"), ("close this tab", "keys"), ("press command shift t", "keys"),
     ("hey click could you please open safari for me thanks", "open_app"), ("I want to listen to Drake", "play_music"),
     ("make me a note titled keyboard", "new_note"), ("opne notes", "open_app"),
+    # messy, everyday typing
+    ("yo open spotify real quick", "open_app"), ("can u open notes", "open_app"), ("pls play some drake", "play_music"),
+    ("turn the volume down a bit", "volume"), ("lower the volume", "volume"), ("raise the volume", "volume"),
+    ("can you mute my mac", "volume"), ("take a ss", "screenshot"), ("text my mom im on my way", "send_message"),
+    ("set a reminder to call grandma at 6", "reminder"), ("remind me in 10 min to check the oven", "reminder"),
+    ("start focusing", "focus"), ("lock in for an hour", "focus"), ("i wanna watch youtube", "open_url"),
+    ("go back a song", "music_control"), ("turn it down", "volume"), ("louder pls", "volume"),
+    ("could ya close safari", "quit_app"), ("open up my downloads folder", "open_file"),
+    ("make a new note called ideas", "new_note"), ("put on some music", "music_control"),
+    ("shut off the wifi", "wifi"), ("dark mode pls", "dark_mode"), ("new tab", "keys"),
+    ("can you help me focus", "focus"), ("open chrome and go to youtube", "open_url"), ("stop the music", "music_control"),
 ]
 QUESTIONS = ["what is the capital of france", "why is the sky blue", "write me a poem about cats",
              "how do I make pancakes", "who won the super bowl", "tell me a joke", "explain black holes"]

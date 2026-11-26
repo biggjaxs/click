@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-W = 380        # the flat panel's width
+W = 420        # the flat panel's width
 GOO_M = 40     # room around it for the flowing goo (same look as the full chat and the orb)
 
 
@@ -93,10 +93,10 @@ class QuickAsk(QWidget):
         self.out.setTextFormat(Qt.MarkdownText)
         self.out.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
         self.out.setOpenExternalLinks(True)
-        self.out.setStyleSheet("color: #f4f4f5; font-size: 13.5px;")
+        self.out.setStyleSheet("color: #f4f4f5; font-size: 14px; line-height: 140%;")
         self.out.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.scroll.setWidget(self.out)
-        self.scroll.setMaximumHeight(320)
+        self.scroll.setMaximumHeight(380)
         self.scroll.hide()
         self.actions = QHBoxLayout()
         self.actions.setSpacing(6)
@@ -108,7 +108,7 @@ class QuickAsk(QWidget):
         self._typing.setSingleShot(True)
         self._typing.setInterval(350)  # start working on the answer as soon as you pause
         self._typing.timeout.connect(lambda: self.busy or self.link.send(
-            {"type": "typing", "text": self.input.text(), "conversation_id": self.conversation_id}))
+            {"type": "typing", "text": self.input.text(), "conversation_id": self.conversation_id, "brief": True}))
         self.input.textEdited.connect(self._edited)
         self.mic = MicButton(accent)
         self.mic.setToolTip("Talk to Clicky (Control + Space)")
@@ -299,7 +299,8 @@ class QuickAsk(QWidget):
             self.status.setText("Still answering the last question… press Enter again in a moment.")
             return
         sent = (self.context_fn() or "") + text  # e.g. "(I'm on step 2 of the lesson ...) where is that?"
-        if not self.link.send({"type": "send", "text": sent, "conversation_id": self.conversation_id, "uploads": []}):
+        if not self.link.send({"type": "send", "text": sent, "conversation_id": self.conversation_id, "uploads": [],
+                               "brief": True}):
             self.status.setText("Not connected yet. Try again in a moment.")
             return
         self.busy = True

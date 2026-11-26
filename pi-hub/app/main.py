@@ -696,6 +696,7 @@ async def chat_ws(ws: WebSocket):
                     await send({"type": "error", "message": "Still answering. Press Stop first."})
                     continue
                 state = TurnState()
+                state.brief = bool(msg.get("brief"))  # the small Ask box: short answers
                 incog = incognito_key if msg.get("incognito") else None
 
                 async def run_turn(m=msg, st=state, ik=incog):
@@ -716,7 +717,7 @@ async def chat_ws(ws: WebSocket):
                     partial = str(msg.get("text", ""))[:2000]
                     conv_id = msg.get("conversation_id")
                     # work out the answer while they type (questions only; nothing is done before Enter)
-                    asyncio.create_task(s.orchestrator.speculate(conv_id, partial, send))
+                    asyncio.create_task(s.orchestrator.speculate(conv_id, partial, send, bool(msg.get("brief"))))
                     if not s.orchestrator.fast and not s.orchestrator._speculable(partial):
                         asyncio.create_task(s.orchestrator.prewarm(conv_id, partial))
             elif kind == "stop":
