@@ -149,6 +149,15 @@ jobs:
           grep -q "SELFTEST VOICE OK" selftest.log || { echo "::error::voice isn't fully inside the app"; grep VOICE selftest.log; exit 1; }
           file dist/Click.app/Contents/MacOS/Click
 
+      - name: Real start (like a person opening it after an update) - the chat must connect and answer
+        run: |
+          python packaging/ci/fake_ollama.py & sleep 2
+          ver=$(python -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)', open('pc-companion/companion/__init__.py').read()).group(1))")
+          echo "--- with the welcome showing (first start after an update) ---"
+          python packaging/ci/realstart.py --app dist/Click.app/Contents/MacOS/Click --home "$HOME/selftest" --seconds 60
+          echo "--- normal start, with the companion brain running ---"
+          python packaging/ci/realstart.py --app dist/Click.app/Contents/MacOS/Click --home "$HOME/selftest" --seconds 120 --version "$ver"
+
       - name: Make the .dmg
         run: |
           mkdir -p dmg && cp -R dist/Click.app dmg/ && ln -s /Applications dmg/Applications

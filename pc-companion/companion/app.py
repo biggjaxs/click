@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import socket
 import sys
 import time
@@ -36,7 +37,7 @@ class App:
         self.qt = QApplication.instance() or QApplication(sys.argv)
         self.qt.setQuitOnLastWindowClosed(False)
         self.qt.setApplicationName("Click")
-        if "--selftest" not in sys.argv:
+        if "--selftest" not in sys.argv and not os.environ.get("CLICK_CI_REALSTART"):
             _move_to_applications()   # opened from the download / disk image: offer to install properly
             _finish_install()         # stamp this version with this Mac's own signature (keeps permissions)
             _close_other_copies()     # an older Click still running from somewhere else: close it
@@ -77,7 +78,7 @@ class App:
         self.tray = Tray(self)
         self.selftest = "--selftest" in sys.argv
         self._start_hotkeys()
-        if not self.selftest:
+        if not self.selftest and not os.environ.get("CLICK_CI_REALSTART"):
             self.platform.request_permissions()
         self.server.start()
         self.tile = None

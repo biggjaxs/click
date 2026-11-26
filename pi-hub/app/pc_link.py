@@ -275,7 +275,10 @@ class PcLink:
         if msg["type"] == "event":
             handler = self.event_handlers.get(f"{msg['service']}.{msg['action']}")
             if handler:
-                handler(msg["payload"])
+                try:
+                    handler(msg["payload"])
+                except Exception:  # noqa: BLE001 - a bad note must never drop the link
+                    log.exception("event %s.%s failed", msg["service"], msg["action"])
             return
         q = self._queues.get(msg["id"])
         if q:
