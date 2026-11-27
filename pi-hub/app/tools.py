@@ -143,14 +143,21 @@ def available_tools(deps, pc_connected: bool) -> list[dict]:
 
 # Only send the tools a question actually needs. Every tool description is text the model must read
 # before answering, so a plain chat question with no tools is several times faster on a laptop CPU.
+# Which tools a message might need. Kept strict on purpose: offering tools makes the prompt much longer (slow on
+# processor-only Macs), so "who PAINTED the Mona Lisa" or "the boiling POINT of water" must not bring them in.
 _WANT = {
-    "web": re.compile(r"\b(search|look up|google|latest|news|today|tonight|weather|price|cost|score|who won|"
-                      r"current|website|online|internet|recent)\b", re.I),
-    "image": re.compile(r"\b(draw|image|picture|photo|logo|illustrat\w*|paint\w*|sketch|wallpaper|generate an?)\b", re.I),
-    "screen": re.compile(r"\b(screen|window|monitor|see|look|showing|where|show me|point|button|menu|icon|"
-                         r"settings?|open|tab|app|error|this)\b", re.I),
-    "act": re.compile(r"\b(click|press|type|scroll|tap|select|close|open)\b", re.I),
-    "files": re.compile(r"\b(files?|folders?|documents?|downloads|desktop|pdf|spreadsheet|rename|move)\b", re.I),
+    "web": re.compile(r"\b(search|look up|google|latest|news|tonight|weather|forecast|price of|stock|score|who won|"
+                      r"website|online|on the internet|recent|this week|right now in|today'?s)\b", re.I),
+    "image": re.compile(r"\b(draw|sketch|illustrat\w*|(?:make|create|generate|paint|design)\s+(?:me\s+)?(?:an?\s+|my\s+)?"
+                        r"(?:image|picture|drawing|logo|painting|wallpaper|icon|poster|art))\b", re.I),
+    "screen": re.compile(r"\b(screen|window|monitor|what(?:'s| is) (?:this|that|on)|look at|see (?:my|this|what)|"
+                         r"showing|show me where|where(?:'s| is| are| do i)\b.*\b(?:button|icon|menu|setting|tab|app)|"
+                         r"point (?:at|to|out)|which button|what button|this (?:button|icon|menu|tab|app|error|page)|"
+                         r"error|pop-?up)\b", re.I),
+    "act": re.compile(r"\b(click (?:on|the|it)|press (?:the|enter|return|cmd|command|ctrl|space)|scroll (?:down|up)|"
+                      r"tap (?:on|the)|type (?:in|this|that|my|it|out))\b", re.I),
+    "files": re.compile(r"\b(files?|folders?|my documents|downloads folder|desktop|pdf|spreadsheet|rename (?:the|my|this)|"
+                        r"move (?:the|my|this) (?:file|folder))\b", re.I),
     "memory": re.compile(r"\b(remember|forget|my name|about me)\b", re.I),
 }
 _GROUPS = {

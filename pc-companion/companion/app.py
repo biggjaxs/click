@@ -309,7 +309,7 @@ class App:
     def _maybe_get_smart(self) -> None:
         inf = self.inference
         smart = self.models.get("smart")
-        if self.selftest or not smart or smart == self.models["chat"] or not self.settings.get("smart_mode", True) \
+        if self.selftest or not smart or smart == self.models["chat"] or not self.settings.get("smart_mode", False) \
                 or inf.smart_model() or getattr(self, "_smart_downloading", False):
             return
         self._smart_downloading = True

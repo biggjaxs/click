@@ -955,9 +955,9 @@ class Tray(QObject):
         self.speak_action.setChecked(bool(app_ctl.settings.get("speak_answers", False)))
         self.speak_action.toggled.connect(lambda on: app_ctl.settings.set("speak_answers", bool(on)))
         menu.addAction(self.speak_action)
-        self.smart_action = QAction("Smart mode (understands more, answers a bit slower)")
+        self.smart_action = QAction("Smart mode (understands more; on Intel Macs answers take 5-20 s)")
         self.smart_action.setCheckable(True)
-        self.smart_action.setChecked(bool(app_ctl.settings.get("smart_mode", True)))
+        self.smart_action.setChecked(bool(app_ctl.settings.get("smart_mode", False)))
 
         def set_smart(on):
             app_ctl.settings.set("smart_mode", bool(on))

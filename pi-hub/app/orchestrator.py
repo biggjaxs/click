@@ -104,8 +104,9 @@ class Reply(str):
 
 SCREEN_INTENT = re.compile(
     r"\b(screen|window|monitor|on my (pc|computer|mac|laptop)|what am i (looking at|doing)|what('s| is) this|"
-    r"this (error|page|message|window|app|popup|dialog)|where('s| is)|show me|point (at|to)|click (on|the)|"
-    r"which button|how do i (get|find|open)|can you see)\b", re.I)
+    r"this (error|page|message|window|app|popup|pop-up|dialog|button|icon|menu|tab|setting)|"
+    r"(that|the) (button|icon|menu) (here|on)|what does (this|that)|where('s| is)|show me|point (at|to)|"
+    r"click (on|the)|which button|what button|how do i (get|find|open)|can you see|see my)\b", re.I)
 
 
 def _now_str() -> str:
@@ -193,7 +194,9 @@ class Orchestrator:
     @property
     def fast(self) -> bool:
         """Processor-only computers (e.g. Intel Macs): keep every prompt small so answers come in seconds."""
-        return bool(self.deps.link.connected and self.deps.link.capabilities.get("cpu_only"))
+        fast = bool(self.deps.link.connected and self.deps.link.capabilities.get("cpu_only"))
+        self.deps.memory.lexical = fast  # no separate memory model to compete for memory (see memory._embed)
+        return fast
 
     # ---- conversations -------------------------------------------------------------------
     def _new_conversation(self, first_text: str) -> int:
@@ -215,30 +218,59 @@ class Orchestrator:
         self.deps.db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conv_id))
         return mid
 
-    def _history(self, conv_id: int | None, incognito_key: str | None) -> list[dict]:
+    def _history(self, conv_id: int | None, incognito_key: str | None, headroom: int = 0) -> list[dict]:
+        """The conversation so far, built so the AI engine can reuse what it already read:
+        - each of your messages is replayed exactly as it was sent (with its background note), and
+        - the window of old messages only moves now and then (in a jump), instead of by one message every turn.
+        Either change would make the model re-read the whole conversation, which costs seconds."""
         if incognito_key:
-            msgs = self.incognito_sessions.get(incognito_key, [])
+            msgs = [dict(m, id=i) for i, m in enumerate(self.incognito_sessions.get(incognito_key, []))]
         elif conv_id:
             msgs = self.deps.db.query(
-                "SELECT role, content, meta FROM messages WHERE conversation_id = ? AND role IN ('user','assistant') "
+                "SELECT id, role, content, meta FROM messages WHERE conversation_id = ? AND role IN ('user','assistant') "
                 "ORDER BY id DESC LIMIT 60", (conv_id,))[::-1]
         else:
             msgs = []
         budget = 700 if self.fast else self.deps.cfg.history_token_budget
-        out: list[dict] = []
-        for m in reversed(msgs):
+        rows = []
+        for m in msgs:
             content = m["content"]
             meta = m.get("meta")
             if isinstance(meta, str):
                 meta = json.loads(meta or "{}")
-            if meta and meta.get("context"):
+            if meta and meta.get("sent") and m["role"] == "user":
+                content = meta["sent"]  # exactly what the model saw last time
+            elif meta and meta.get("context"):
                 content = f"{content}\n\n{meta['context']}"
-            cost = estimate_tokens(content)
-            if budget - cost < 0 and out:
-                break
-            budget -= cost
-            out.append({"role": m["role"], "content": content})
-        return out[::-1]
+            rows.append((m["id"], m["role"], content, estimate_tokens(content)))
+        anchors = self.__dict__.setdefault("_hist_anchor", {})
+        key = incognito_key or conv_id
+        start = anchors.get(key)
+        vis = [r for r in rows if start is None or r[0] >= start]
+        if sum(r[3] for r in vis) + headroom > budget * 1.3 or not vis:
+            keep, total = [], 0  # jump: keep about half the budget of the newest messages
+            for r in reversed(rows):
+                if total + r[3] > budget * 0.6 and keep:
+                    break
+                keep.append(r)
+                total += r[3]
+            vis = keep[::-1]
+            if vis and vis[0][1] == "assistant" and len(vis) > 1:
+                vis = vis[1:]  # start with one of your messages
+            anchors[key] = vis[0][0] if vis else None
+        return [{"role": r[1], "content": r[2]} for r in vis]
+
+    def _remember_sent(self, conv_id: int, sent: str) -> None:
+        """Keep exactly what was sent with your latest message, so the next turn replays it identically."""
+        try:
+            row = self.deps.db.one("SELECT id, meta FROM messages WHERE conversation_id = ? AND role = 'user' "
+                                   "ORDER BY id DESC LIMIT 1", (conv_id,))
+            if row:
+                meta = json.loads(row["meta"] or "{}") if isinstance(row["meta"], str) else (row["meta"] or {})
+                meta["sent"] = sent[:6000]
+                self.deps.db.execute("UPDATE messages SET meta = ? WHERE id = ?", (json.dumps(meta), row["id"]))
+        except Exception:  # noqa: BLE001 - only a speed-up
+            log.debug("couldn't keep the sent message", exc_info=True)
 
     # ---- prompt ------------------------------------------------------------------------------------
     # The system prompt stays IDENTICAL between turns so the model can reuse its cached work
@@ -351,10 +383,11 @@ class Orchestrator:
             lines.append("Other windows: " + "; ".join(res["windows"][:8]))
         if res.get("blocked_windows"):
             lines.append("Hidden for privacy (blacked out): " + ", ".join(res["blocked_windows"]))
+        cap = 1600 if self.fast else 3300  # processor-only Macs: less to read, so the answer starts within 2 s
         if res.get("layout"):  # where things are: text by screen area, the front window's buttons, the Dock
-            lines.append(res["layout"][:3200])
+            lines.append(res["layout"][:cap])
         elif res.get("text"):
-            lines.append("Text on screen (OCR):\n" + res["text"][:3500])
+            lines.append("Text on screen (OCR):\n" + res["text"][:cap])
         if res.get("image_b64"):
             lines.append("A screenshot is attached to this message.")
         lines.append("To point at something here, call find_ui_element with its visible text.")
@@ -445,7 +478,7 @@ class Orchestrator:
         recalled = {"core": [], "relevant": []}
         if not incognito:
             try:
-                recalled = await deps.memory.recall(text, 250 if self.fast else deps.cfg.memory_token_budget,
+                recalled = await deps.memory.recall(text, 120 if self.fast else deps.cfg.memory_token_budget,
                                                     conversation_id)
             except Exception:  # noqa: BLE001
                 log.exception("recall failed")
@@ -1096,7 +1129,7 @@ class Orchestrator:
         messages = [{"role": "system", "content": self._system_prompt("pc", False)}]
         messages += self._history(conv, None) if conv else []
         note, room = brief_note(text)
-        brief = f"\n\n{note}" if sp.get("brief") else ""
+        brief = f"\n\n{note}" if sp.get("brief") and not self.fast else ""
         messages.append({"role": "user",
                          "content": f"{self._context_block(recalled, conv, False, None)}{web}\n\n{text}{brief}"})
         out: list[str] = []
@@ -1194,10 +1227,15 @@ class Orchestrator:
         if source == "pi":
             await send({"type": "notice", "text": "Your computer is offline, so the small backup model on the Pi is answering."})
         tools = select_tools(deps, text) if source == "pc" and "Don't call any tools" not in (memory_note or "") else []
+        if self.fast and screen and not re.search(r"\b(?:click|press|type|scroll|open|find|point)\b", text, re.I):
+            # processor-only Macs: the screen is already in the message, so answer from it directly. Offering tools
+            # would make the AI re-read the whole conversation (seconds); "where is X" is pointed at without the AI.
+            tools = []
         options = {"num_predict": 220} if self.fast else {}
         if getattr(state, "brief", False):
             options["num_predict"] = brief_note(text)[1]
-            memory_note = (memory_note + "\n" if memory_note else "") + brief_note(text)[0]
+            if not self.fast:  # processor-only Macs: the standing instruction says it once (less to re-read)
+                memory_note = (memory_note + "\n" if memory_note else "") + brief_note(text)[0]
         max_rounds = 3 if self.fast else deps.cfg.max_tool_rounds
         messages = [{"role": "system", "content": self._system_prompt(source, bool(tools))}]
         messages += self._history(conversation_id, incognito_key)
@@ -1207,6 +1245,8 @@ class Orchestrator:
         if images and source == "pc":
             last["images"] = images
         messages[-1] = last
+        if conversation_id and not incognito and last.get("role") == "user":
+            self._remember_sent(conversation_id, last["content"])
         t_start = t_start or time.perf_counter()
         ctx = ToolContext(deps=deps, send=send, conversation_id=conversation_id, task_id=task_id,
                           user_text=text, incognito=incognito)
@@ -1214,7 +1254,10 @@ class Orchestrator:
         for _round in range(max_rounds + 1):
             round_text, calls = [], []
             try:
-                async for ev in backend.chat_stream(messages, tools or None, options=options, role=model_role(text)):
+                # tool questions always use the fast model: the tool list makes the prompt long, and reading a long
+                # prompt is where the big model is slowest
+                role = "chat" if tools else model_role(text)
+                async for ev in backend.chat_stream(messages, tools or None, options=options, role=role):
                     if state.cancel.is_set():
                         break
                     if ev["type"] == "token":
@@ -1274,8 +1317,23 @@ class Orchestrator:
     def _memory_backend(self):
         return self.deps.pc_backend if self.deps.link.connected else self.deps.pi_backend
 
+    async def _pre_read_next(self, conv_id) -> None:
+        """While you read the answer and type the next question, the fast model reads the conversation as the
+        next turn will send it, so your next question only has its own few words left to read."""
+        if not (getattr(self, "pre_read", True) and self.fast and conv_id and self.deps.link.connected):
+            return
+        try:
+            msgs = [{"role": "system", "content": self._system_prompt("pc", False)}]
+            msgs += self._history(conv_id, None, headroom=180)  # make any window jump now, not on the next question
+            msgs.append({"role": "user", "content": "<context>"})
+            async for _ in self.deps.pc_backend.chat_stream(msgs, None, options={"num_predict": 1}, role="chat"):
+                pass
+        except Exception:  # noqa: BLE001 - only a speed-up
+            pass
+
     async def _after_reply(self, conv_id, user_msg_id, asst_id, user_text, answer, skip_extract):
         deps = self.deps
+        await self._pre_read_next(conv_id)
         try:
             await deps.memory.index("message", user_msg_id, user_text)
             await deps.memory.index("message", asst_id, answer[:1500])

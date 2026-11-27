@@ -48,6 +48,16 @@ The test benches in `tools/evals/` (see the bottom) measure most of these with t
 
 ## Speed
 
+- **v1.28 speed pass (target: every request starts answering within 2 s).** Measured on a 4-core test machine
+  with the real models: typical questions start in ~0.4 s, small talk instantly, commands/lessons show something
+  in <0.1 s. Fixed: model reloads (num_ctx changed per request), a 4th model (memory embeddings) pushing the chat
+  models out, tool lists offered for words like "paint"/"point", the history window moving every turn, messages
+  replayed differently from how they were sent, and the conversation pre-read after each answer.
+  Still slower than 2 s to FINISH: screen questions (~3-5 s: reading the screen first), long explanations
+  (stream in over a few seconds), Smart mode (5-20 s on Intel, now off by default).
+- The small model sometimes imitates an earlier "I couldn't finish that" message in the conversation (seen on the
+  Linux test box where Mac actions fail). Idea: replay failed-action messages to the AI in a neutral form.
+
 - **Smart mode answers are slower to finish** (7B writes ~7-9 words/s on the i9 vs ~25 for the small model).
 - **Click Engine (our own, written from scratch) is in beta (v1.27)**: off by default (menu bar > Use Click Engine).
   It's correct and has every feature (streaming, tool calls, JSON-shaped answers, memory reuse), but it's slower

@@ -108,7 +108,9 @@ class Memory:
 
     # ---- embeddings ---------------------------------------------------------------------
     async def _embed(self, texts: list[str]) -> list[np.ndarray] | None:
-        if not self.embedder or not texts:
+        # on processor-only computers, memory search uses keywords: a separate embedding model would push the chat
+        # models out of memory (only 3 fit at once) and they'd have to reload
+        if not self.embedder or not texts or getattr(self, "lexical", False):
             return None
         try:
             vecs = await self.embedder(texts)
@@ -314,8 +316,9 @@ class Memory:
     async def recall(self, query: str, budget_tokens: int, conversation_id: int | None = None) -> dict:
         core = self.core_profile()
         used = sum(estimate_tokens(c) for c in core)
-        candidates = await self.search(query, ("fact", "episode", "message", "file"), limit=40,
-                                       exclude_conversation=conversation_id)
+        lexical = getattr(self, "lexical", False)
+        kinds = ("fact",) if lexical else ("fact", "episode", "message", "file")  # keyword mode: saved facts only
+        candidates = await self.search(query, kinds, limit=40, exclude_conversation=conversation_id)
         now = time.time()
         scored = []
         for c in candidates:
@@ -325,7 +328,7 @@ class Memory:
             recency = math.exp(-age_days / 30)
             importance = 1.0 if c["kind"] == "fact" else 0.6 if c["kind"] == "episode" else 0.4
             score = 0.7 * c["sim"] + 0.15 * recency + 0.15 * importance
-            if c["sim"] >= (0.35 if self.embedder else 0.15):
+            if c["sim"] >= (0.4 if lexical else 0.35 if self.embedder else 0.15):
                 scored.append((score, c))
         scored.sort(key=lambda x: x[0], reverse=True)
         relevant = []
@@ -335,7 +338,7 @@ class Memory:
                 continue
             used += cost
             relevant.append({"kind": c["kind"], "text": c["text"]})
-            if len(relevant) >= 12:
+            if len(relevant) >= (3 if lexical else 12):
                 break
         return {"core": core, "relevant": relevant}
 

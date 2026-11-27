@@ -93,18 +93,20 @@ class Inference:
         """Load the model into memory right away so the first question is fast."""
         try:
             async with httpx.AsyncClient(timeout=300) as c:
-                await c.post(f"{self.url}/api/generate", json={"model": self.models["chat"], "keep_alive": KEEP_ALIVE})
+                same = {"num_ctx": self.num_ctx, "num_thread": THREADS}  # exactly what questions use: no reload later
+                await c.post(f"{self.url}/api/generate", json={"model": self.models["chat"], "keep_alive": KEEP_ALIVE,
+                                                                "options": same})
                 await self.refresh_installed()
                 smart = self.smart_model()
                 if smart:  # keep the smart model ready too (both fit easily in memory)
-                    await c.post(f"{self.url}/api/generate", json={"model": smart, "keep_alive": KEEP_ALIVE})
+                    await c.post(f"{self.url}/api/generate", json={"model": smart, "keep_alive": KEEP_ALIVE, "options": same})
         except Exception:  # noqa: BLE001 - Ollama not running yet; the first question will load it
             pass
 
     def smart_model(self) -> str | None:
         """The smart model, if Smart mode is on and it's downloaded (else None: the fast model answers)."""
         smart = self.models.get("smart")
-        if not smart or smart == self.models["chat"] or not self.settings.get("smart_mode", True):
+        if not smart or smart == self.models["chat"] or not self.settings.get("smart_mode", False):
             return None
         return smart if smart in getattr(self, "_installed", set()) or \
             smart.removesuffix(":latest") in getattr(self, "_installed", set()) else None
@@ -149,7 +151,10 @@ class Inference:
         engine = getattr(self, "engine", None)
         base = engine.url if engine is not None and engine.serves(model) else self.url  # Click Engine or Ollama
         body = {"model": model, "messages": payload.get("messages", []), "stream": True, "keep_alive": KEEP_ALIVE,
-                "options": {"num_ctx": self.num_ctx, "num_thread": THREADS, **(payload.get("options") or {})}}
+                # the SAME memory size and thread count every time: Ollama reloads the model (and forgets everything it
+                # had already read) whenever these change, which cost many seconds per question
+                "options": {**{k: v for k, v in (payload.get("options") or {}).items() if k not in ("num_ctx", "num_thread")},
+                            "num_ctx": self.num_ctx, "num_thread": THREADS}}
         if payload.get("tools"):
             body["tools"] = payload["tools"]
         if payload.get("format"):
@@ -175,6 +180,9 @@ class Inference:
                         if msg.get("tool_calls"):
                             calls.extend(msg["tool_calls"])
                         if chunk.get("done"):
+                            log.info("AI %s read %s new pieces in %.2fs, wrote %s in %.2fs", model,
+                                     chunk.get("prompt_eval_count"), (chunk.get("prompt_eval_duration") or 0) / 1e9,
+                                     chunk.get("eval_count"), (chunk.get("eval_duration") or 0) / 1e9)
                             break
         except _RetryWithoutThink:
             self.settings.data["think"] = True  # this model doesn't support turning thinking off

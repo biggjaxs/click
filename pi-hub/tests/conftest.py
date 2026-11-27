@@ -37,5 +37,6 @@ def services(tmp_path, monkeypatch):
 
     s = Services(load_config())
     s.memory.embedder = fake_embed
+    s.orchestrator.pre_read = False  # tested on its own (it adds a background AI call after each answer)
     yield s
     s.db.close()

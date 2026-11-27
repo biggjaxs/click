@@ -894,3 +894,19 @@ def test_small_talk_is_instant_and_quick_questions_use_the_fast_model(services):
     assert model_role("whats the capital of spain") == "chat"
     assert model_role("explain how a vpn works") == "smart"
     assert model_role("why does my mac get so hot when i have a lot of chrome tabs open") == "smart"
+
+
+def test_after_an_answer_the_next_turn_is_read_ahead(services):
+    _wire(services, {})
+    services.orchestrator.pre_read = True
+    services.pc_backend = FakeBackend([[{"type": "token", "text": "Madrid."}]])
+    rec = Recorder()
+    run(services.orchestrator.handle(send=rec, text="whats the capital of spain", conversation_id=None,
+                                     upload_ids=[], incognito_key=None, state=_state()))
+    conv = next(e["id"] for e in rec.events if e["type"] == "conversation")
+    run(services.orchestrator._pre_read_next(conv))
+    pre = services.pc_backend.calls[-1]
+    assert pre["options"] == {"num_predict": 1} and pre["role"] == "chat"
+    # it reads exactly what the next turn will send: your message as it was sent, then the answer
+    first = services.pc_backend.calls[0]["messages"]
+    assert pre["messages"][1]["content"] == first[-1]["content"] and pre["messages"][2]["content"] == "Madrid."

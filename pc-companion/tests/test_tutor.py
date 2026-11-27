@@ -201,9 +201,9 @@ def test_smart_mode_uses_the_bigger_model_only_when_it_is_here():
     inf = Inference(settings, models)
     assert inf.smart_model() is None  # not downloaded yet: the fast model answers meanwhile
     inf._installed = {"qwen2.5:7b", "qwen2.5:1.5b"}
-    assert inf.smart_model() == "qwen2.5:7b"
-    settings["smart_mode"] = False
-    assert inf.smart_model() is None  # switched off in the menu bar
+    assert inf.smart_model() is None  # off by default: answers start within 2 seconds on the fast model
+    settings["smart_mode"] = True
+    assert inf.smart_model() == "qwen2.5:7b"  # switched on in the menu bar
 
 
 def test_click_engine_is_used_only_when_on_running_and_ready():
